@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pingpong Turnier App</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+    <div id="app">
+        <div id="auth-screen">
+            <h2>Willkommen!</h2>
+            <button id="show-register-btn">Registrieren</button>
+            <button id="show-login-btn">Anmelden</button>
+
+            <form id="register-form" class="hidden form-container">
+                <h3>Registrierung</h3>
+                <input type="text" id="register-firstname" placeholder="Vorname" required>
+                <input type="text" id="register-lastname" placeholder="Nachname" required>
+                <input type="text" id="register-username" placeholder="Benutzername" required>
+                <input type="email" id="register-email" placeholder="E-Mailadresse" required>
+                <input type="tel" id="register-phone" placeholder="Telefonnummer" required>
+                <input type="password" id="register-password" placeholder="Passwort" required>
+                <button type="submit">Registrieren</button>
+                <p id="register-message" class="message"></p>
+            </form>
+
+            <div id="verify-screen" class="hidden form-container">
+                <h3>E-Mail Verifizierung</h3>
+                <p>Wir haben einen Code an <span id="verify-email-display"></span> gesendet. Bitte gib den Code ein, um dein Konto zu verifizieren.</p>
+                <input type="text" id="verify-code" placeholder="Verifizierungscode" required>
+                <button id="verify-submit-btn">Bestätigen</button>
+                <p id="verify-message" class="message"></p>
+            </div>
+
+            <form id="login-form" class="hidden form-container">
+                <h3>Anmelden</h3>
+                <input type="text" id="login-username" placeholder="Benutzername oder E-Mail" required>
+                <input type="password" id="login-password" placeholder="Passwort" required>
+                <button type="submit">Anmelden</button>
+                <p id="login-message" class="message"></p>
+            </form>
+        </div>
+
+        <div id="main-screen" class="hidden">
+            <header>
+                <button id="menu-btn">☰</button> <h1>Turnier</h1>
+                <button id="profile-btn">👤</button> </header>
+
+             <div id="admin-panel" style="padding: 10px; background-color: #ffc; text-align: center;">
+                <button id="generate-tournament-btn">Turnierplan generieren (Admin)</button>
+                <button id="seed-ko-btn" style="margin-left: 10px;">KO-Runde Seeden (Admin)</button>
+             </div>
+
+            <div id="tournament-overview">
+                <div class="event-card">
+                    <div class="event-icon">👑</div> <p>Aktuelles Event</p>
+                    <p><span id="event-date">Datum wird geladen...</span></p>
+                    <p><strong>Location name:</strong> <span id="location-name">Pferderennbahn Schachen Aarau</span></p>
+                    <p><strong>Location adress:</strong> <span id="location-address">Schwimmbadstrasse 18, 5000 Aarau</span></p>
+                    <p><strong>Game categories:</strong></p>
+                    <div class="categories">
+                        <span class="category active">🏓 Ping Pong</span>
+                        <span class="category inactive">♟️ Chess</span>
+                        <span class="category inactive">🎯 Darts</span>
+                        <span class="category inactive">🎱 Billiard</span>
+                    </div>
+
+                    <div class="leaderboard-section">
+                        <h3>Leaderboard</h3>
+                        <div id="leaderboard-content">
+                            <p>Die Bestenliste wird während des Turniers aktualisiert.</p>
+                            <ol id="leaderboard-list"></ol>
+                        </div>
+                    </div>
+
+                    <button id="participate-btn">Teilnahme / Turnierplan</button>
+                </div>
+            </div>
+
+            <div id="tournament-plan" class="hidden">
+                <h2>Turnierplan</h2>
+                <input type="text" id="name-filter" placeholder="Nach Spieler filtern...">
+
+                <h3>Vorrunde</h3>
+                <div id="group-stage">
+                    </div>
+
+                <h3>KO-Runde</h3>
+                <div id="knockout-stage">
+                    <div class="ko-bracket">
+                         <div class="ko-round" id="ko-round-16"><h4>Sechzehntelfinale</h4></div>
+                         <div class="ko-round" id="ko-round-qf"><h4>Viertelfinale</h4></div>
+                         <div class="ko-round" id="ko-round-sf"><h4>Halbfinale</h4></div>
+                         <div class="ko-round" id="ko-round-f"><h4>Finale</h4></div>
+                     </div>
+                     <div class="ko-placements">
+                         <div class="ko-round" id="ko-round-p3"><h4>Spiel um Platz 3</h4></div>
+                         <div class="ko-round" id="ko-round-p58sf"><h4>Platz 5-8 HF</h4></div>
+                         <div class="ko-round" id="ko-round-p7"><h4>Spiel um Platz 7</h4></div>
+                         <div class="ko-round" id="ko-round-p5"><h4>Spiel um Platz 5</h4></div>
+                     </div>
+                </div>
+            </div>
+
+            <div id="result-modal" class="modal hidden">
+                <div class="modal-content">
+                    <span class="close-btn">&times;</span>
+                    <h3>Ergebnis eintragen</h3>
+                    <p><span id="player1-name">Spieler 1</span> vs <span id="player2-name">Spieler 2</span></p>
+                    <p>Spielzeit: <span id="match-time">--:--</span> | Tisch: <span id="match-table">?</span></p>
+                    <form id="result-form">
+                        <input type="number" id="score1" placeholder="Punkte Spieler 1" required min="0">
+                        <span>:</span>
+                        <input type="number" id="score2" placeholder="Punkte Spieler 2" required min="0">
+                        <button type="submit" id="submit-result-btn">Ergebnis Senden</button>
+                        <p id="result-modal-message" class="message"></p>
+                    </form>
+                </div>
+            </div>
+
+            <div id="confirm-modal" class="modal hidden">
+                <div class="modal-content">
+                    <span class="close-confirm-btn">&times;</span>
+                    <h3>Ergebnis Bestätigen</h3>
+                    <p>Dein Gegner (<span id="opponent-reporter">Name</span>) hat folgendes Ergebnis eingetragen:</p>
+                    <p><span id="confirm-player1-name">Spieler A</span> <strong id="confirm-score1">X</strong> : <strong id="confirm-score2">Y</strong> <span id="confirm-player2-name">Spieler B</span></p>
+                    <button id="confirm-result-accept-btn">Akzeptieren</button>
+                    <button id="confirm-result-reject-btn">Ablehnen/Problem melden</button>
+                    <p id="confirm-modal-message" class="message"></p>
+                </div>
+            </div>
+
+        </div> </div> <script src="app.js"></script>
+</body>
+</html>
