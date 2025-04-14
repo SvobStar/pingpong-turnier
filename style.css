@@ -1,0 +1,435 @@
+/* Globale Stile & Variablen (Farben aus dem Bild ableiten) */
+:root {
+    --primary-bg: #e8f0f2; /* Helles Hintergrundgrau/Blau */
+    --secondary-bg: #ffffff; /* Weiß für Karten */
+    --primary-color: #0a4f6e; /* Dunkelblau für Text/Akzente */
+    --accent-color: #4fbdbd; /* Türkis für Buttons/Aktive Elemente */
+    --text-color: #333333;
+    --border-radius: 15px;
+    --card-padding: 20px;
+    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; /* Beispiel-Schriftart */
+}
+
+body {
+    font-family: var(--font-family);
+    background-color: var(--primary-bg);
+    color: var(--text-color);
+    margin: 0;
+    padding: 0;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+}
+
+#app {
+    width: 100%;
+    max-width: 450px; /* Typische Smartphone-Breite */
+    background-color: var(--secondary-bg);
+    min-height: 100vh;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+}
+
+/* Versteck-Klasse */
+.hidden {
+    display: none !important; /* Wichtig, um sicherzustellen, dass es versteckt ist */
+}
+
+/* Authentifizierungs- & Formular-Stile */
+#auth-screen, .form-container {
+    padding: var(--card-padding);
+    text-align: center;
+}
+
+#auth-screen h2 {
+    color: var(--primary-color);
+}
+
+
+.form-container {
+    margin-top: 20px;
+    border: 1px solid #ddd;
+    border-radius: var(--border-radius);
+    background-color: #f9f9f9;
+    padding: var(--card-padding);
+}
+.form-container h3 {
+    color: var(--primary-color);
+    margin-top: 0;
+    margin-bottom: 15px;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="tel"],
+input[type="password"],
+input[type="number"] {
+    width: calc(100% - 22px); /* Breite minus Padding/Border */
+    padding: 10px;
+    margin-bottom: 10px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+    font-size: 1em;
+}
+
+button {
+    background-color: var(--accent-color);
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1em;
+    margin: 5px;
+    transition: background-color 0.3s ease;
+}
+
+button:hover:not(:disabled) {
+    background-color: #3aa8a8; /* Etwas dunkleres Türkis */
+}
+button:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+}
+
+
+#show-register-btn, #show-login-btn {
+    background-color: var(--primary-color);
+    margin: 10px 5px;
+}
+#show-register-btn:hover, #show-login-btn:hover {
+    background-color: #083b52; /* Dunkleres Blau */
+}
+
+
+.message {
+    margin-top: 10px;
+    font-size: 0.9em;
+    color: red; /* Standard für Fehler */
+    min-height: 1.2em; /* Platzhalter, damit Layout nicht springt */
+}
+.message.success {
+    color: green;
+}
+
+
+/* Hauptbildschirm */
+#main-screen {
+    display: flex;
+    flex-direction: column;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: var(--primary-color);
+    color: white;
+    padding: 10px var(--card-padding);
+}
+
+header h1 {
+    margin: 0;
+    font-size: 1.5em;
+    cursor: pointer; /* Um zum Overview zurückzukehren */
+}
+
+header button {
+    background: none;
+    border: none;
+    color: white;
+    font-size: 1.5em;
+    cursor: pointer;
+}
+
+/* Turnierübersicht (an Bild angepasst) */
+#tournament-overview {
+    padding: var(--card-padding);
+    /* Hintergrundmuster ggf. später hinzufügen */
+    background-color: var(--primary-color); /* Fallback Farbe */
+}
+
+.event-card {
+    background-color: var(--secondary-bg);
+    border-radius: var(--border-radius);
+    padding: var(--card-padding);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    color: var(--primary-color);
+    text-align: center;
+}
+
+.event-icon {
+    font-size: 2.5em;
+    margin-bottom: 10px;
+}
+
+.event-card p {
+    margin: 8px 0;
+    font-size: 0.95em;
+    color: #555;
+}
+.event-card p strong {
+    color: var(--primary-color);
+}
+
+.categories {
+    margin: 15px 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+}
+
+.category {
+    background-color: #eee;
+    color: #777;
+    padding: 8px 15px;
+    border-radius: 20px;
+    font-size: 0.9em;
+    border: 1px solid #ddd;
+}
+
+.category.active {
+    background-color: var(--accent-color);
+    color: white;
+    border-color: var(--accent-color);
+}
+
+.leaderboard-section {
+    background-color: var(--primary-color);
+    color: white;
+    border-radius: var(--border-radius);
+    padding: 15px;
+    margin: 20px 0;
+    text-align: left;
+}
+
+.leaderboard-section h3 {
+    margin-top: 0;
+    border-bottom: 1px solid rgba(255,255,255,0.5);
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+#leaderboard-content p {
+    color: #eee; /* Hellerer Text für dunklen Hintergrund */
+    font-size: 0.9em;
+    text-align: center;
+    margin-bottom: 10px;
+}
+#leaderboard-list {
+    list-style: none;
+    padding: 0;
+    max-height: 200px; /* Beispiel: Höhe begrenzen und scrollbar machen */
+    overflow-y: auto;
+}
+#leaderboard-list li {
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.2);
+    font-size: 0.9em;
+}
+#leaderboard-list li:last-child {
+    border-bottom: none;
+}
+
+
+#participate-btn {
+    width: 100%;
+    padding: 15px;
+    font-size: 1.1em;
+    margin-top: 10px;
+}
+
+/* Turnierplan */
+#tournament-plan {
+    padding: var(--card-padding);
+}
+#tournament-plan h2,
+#tournament-plan h3 {
+    color: var(--primary-color);
+    text-align: center;
+    margin-bottom: 15px;
+}
+
+
+#name-filter {
+    width: calc(100% - 22px);
+    padding: 10px;
+    margin-bottom: 20px;
+    border: 1px solid #ccc;
+    border-radius: 5px;
+}
+
+#group-stage, #knockout-stage {
+    margin-top: 15px;
+}
+
+.group {
+    border: 1px solid #ddd;
+    border-radius: var(--border-radius);
+    margin-bottom: 20px;
+    padding: 15px;
+    background-color: #fdfdfd;
+}
+.group h4 {
+    color: var(--accent-color);
+    margin-top: 0;
+    text-align: center;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+}
+
+.group table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    margin-bottom: 15px;
+}
+.group th, .group td {
+    border: 1px solid #eee;
+    padding: 6px 8px;
+    text-align: left;
+}
+.group th {
+    background-color: #f2f2f2;
+}
+
+.match-list {
+    list-style: none;
+    padding: 0;
+}
+.match-list li {
+    display: flex;
+    flex-wrap: wrap; /* Umbruch bei kleinen Bildschirmen */
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 5px;
+    border-bottom: 1px solid #eee;
+    font-size: 0.9em;
+}
+.match-list li:last-child {
+    border-bottom: none;
+}
+
+.match-list span {
+    margin-right: 5px;
+}
+.match-list .match-result {
+    font-weight: bold;
+    margin-left: auto; /* Schiebt Ergebnis nach rechts */
+    margin-right: 10px;
+    color: var(--primary-color);
+}
+.match-list .result-btn {
+    padding: 4px 8px;
+    font-size: 0.8em;
+    margin: 0; /* Reset margin */
+}
+
+
+/* KO-Baum (Sehr einfache Darstellung) */
+.ko-bracket, .ko-placements {
+    margin-top: 20px;
+    border-left: 2px solid var(--primary-color); /* Linie für den Baum */
+    padding-left: 15px;
+}
+.ko-round {
+    margin-bottom: 20px;
+}
+.ko-round h4 {
+     color: var(--accent-color);
+     margin-bottom: 10px;
+}
+.ko-match {
+    background-color: #f9f9f9;
+    border: 1px solid #eee;
+    padding: 8px;
+    margin-bottom: 8px;
+    border-radius: 5px;
+    display: flex;
+    flex-direction: column; /* Spieler untereinander */
+    position: relative; /* Für Linien später */
+}
+.ko-match .ko-players span {
+    display: block; /* Jeder Spieler in eigener Zeile */
+    padding: 3px 0;
+}
+ .ko-match .ko-result {
+    font-weight: bold;
+    font-size: 0.9em;
+    margin-top: 5px;
+    color: var(--primary-color);
+}
+.ko-match button {
+     padding: 4px 8px;
+     font-size: 0.8em;
+     margin-top: 5px;
+     width: fit-content; /* Button nicht volle Breite */
+     align-self: flex-end; /* Button nach rechts */
+}
+
+/* Modal-Stile */
+.modal {
+    position: fixed; /* Bleibt an Ort und Stelle */
+    z-index: 100; /* Über allem anderen */
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto; /* Scrollen ermöglichen, falls Inhalt zu gross */
+    background-color: rgba(0,0,0,0.6); /* Schwarzer Hintergrund mit Transparenz */
+    display: flex; /* Zentrierung des Inhalts */
+    justify-content: center;
+    align-items: center;
+}
+
+.modal-content {
+    background-color: #fefefe;
+    margin: auto;
+    padding: 30px;
+    border: 1px solid #888;
+    width: 85%;
+    max-width: 400px;
+    border-radius: var(--border-radius);
+    position: relative;
+    text-align: center;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+}
+
+.close-btn, .close-confirm-btn {
+    color: #aaa;
+    position: absolute;
+    top: 10px;
+    right: 20px;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.close-btn:hover,
+.close-btn:focus,
+.close-confirm-btn:hover,
+.close-confirm-btn:focus {
+    color: black;
+    text-decoration: none;
+}
+
+#result-form span {
+    font-size: 1.5em;
+    margin: 0 10px;
+    vertical-align: middle;
+}
+#result-form input[type="number"] {
+    width: 60px; /* Kleinere Breite für Punktezahlen */
+    text-align: center;
+}
+
+#confirm-modal p {
+    margin: 15px 0;
+}
+#confirm-modal strong {
+    font-size: 1.2em;
+    margin: 0 5px;
+}
