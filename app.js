@@ -1,44 +1,38 @@
-// HIER KOMMEN SPÄTER DEINE SUPABASE DATEN REIN
-// const SUPABASE_URL = 'DEINE_SUPABASE_URL';        // <-- FRAGE: Wie lautet deine Supabase Project URL?
-// const SUPABASE_ANON_KEY = 'DEIN_SUPABASE_ANON_KEY'; // <-- FRAGE: Wie lautet dein Supabase anon public Key?
+// --- Supabase Initialisierung ---
+const SUPABASE_URL = 'https://tleekgcafugywbhfwpky.supabase.co'; // Deine URL
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsZWVrZ2NhZnVneXdiaGZ3cGt5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ2MzEzNTcsImV4cCI6MjA2MDIwNzM1N30.UgWOr-rGY17YL11gghJmEg_HUkMscnEf-pPe0gY4Jwk'; // Dein Key
 
-// const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); // Wird aktiviert in Phase 2
+const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Globale Variablen für Phase 1 (localStorage Simulation)
-let currentUser = null; // Angemeldeter Benutzer { id, username, ..., verified }
-let participants = []; // Alle registrierten Teilnehmer
-let tournamentData = { // Struktur für Turnierdaten
-    groups: [], // { id: 'A', players: [userId1, userId2,...], matches: [], standings: [] }
-    knockoutMatches: {}, // { round16: [...], quarter: [...], semi: [...], final: ..., place3: ..., place58_semi: [...], place5: ..., place7: ... }
-    schedule: [], // { matchId, time, player1, player2, type: 'group'/'ko', groupId/roundType, table, result? }
-    results: {} // { matchId: { score1: null, score2: null, confirmed: false, reportedBy: null, winner: null, loser: null } }
+// --- Globale Zustandsvariablen ---
+let currentSession = null; // Hält die Supabase Auth Session
+let currentUserProfile = null; // Hält das Profil des Users aus der 'profiles' Tabelle
+let currentTournamentData = { // Lokaler Cache für Turnierdaten (wird von Supabase geladen)
+    matches: [], // Enthält Match-Objekte aus der DB
+    participants: [], // Enthält Profil-Objekte der Teilnehmer
+    groups: {}, // Struktur zur Organisation der Gruppen (client-seitig generiert)
+    knockoutMatches: {} // Struktur für KO-Baum (client-seitig generiert)
 };
-const startTime = new Date(); // Basis für Zeitplanung
-startTime.setHours(13, 30, 0, 0); // Turnierstart 13:30 Uhr
-const matchDuration = 7; // Minuten (Gruppe)
-const breakDuration = 3; // Minuten (Gruppe)
-const KO_MATCH_DURATION_MIN = 25; // Geschätzte Dauer für ein KO-Spiel
-const KO_BREAK_DURATION_MIN = 5;  // Pause danach
-const BUFFER_AFTER_GROUP_MIN = 15; // Puffer nach letztem Gruppenspiel
+let activeMatchListeners = {}; // Hält aktive Realtime Listener { matchId: channel }
 
-// Globale Zustandsvariablen für Phase 2 (ersetzen dann die oberen)
-// let currentSession = null;
-// let currentUserProfile = null;
+// Konstanten (bleiben gleich)
+const startTime = new Date();
+startTime.setHours(13, 30, 0, 0);
+const matchDuration = 7;
+const breakDuration = 3;
+const KO_MATCH_DURATION_MIN = 25;
+const KO_BREAK_DURATION_MIN = 5;
+const BUFFER_AFTER_GROUP_MIN = 15;
+let finalRanks = {}; // { profileId: rank } - Wird jetzt aus Match-Daten abgeleitet
+let quarterFinalLosers = []; // [{ profileId: id, score: scoreInLostQF, groupPoints: points }]
 
-// Globale Variablen für Spiellogik (behalten wir)
-let finalRanks = {}; // { playerId: rank }
-let quarterFinalLosers = []; // [{ playerId: id, score: scoreInLostQF, groupPoints: points }]
-let tableAvailableTimes = Array(12).fill(null);
-let lastKoMatchStartTime = null;
-
-
-// --- DOM-Elemente holen ---
-// (Hier alle getElementById Aufrufe einfügen, wie im vorherigen Code)
+// --- DOM Elemente holen ---
+// (Alle getElementById wie zuvor...)
 const authScreen = document.getElementById('auth-screen');
 const mainScreen = document.getElementById('main-screen');
 const registerForm = document.getElementById('register-form');
 const loginForm = document.getElementById('login-form');
-const verifyScreen = document.getElementById('verify-screen');
+const verifyScreen = document.getElementById('verify-screen'); // Wird evtl. nicht mehr gebraucht, wenn E-Mail Bestätigung aus ist
 const tournamentOverview = document.getElementById('tournament-overview');
 const tournamentPlan = document.getElementById('tournament-plan');
 const showRegisterBtn = document.getElementById('show-register-btn');
@@ -49,7 +43,7 @@ const leaderboardList = document.getElementById('leaderboard-list');
 const groupStageContainer = document.getElementById('group-stage');
 const knockoutStageContainer = document.getElementById('knockout-stage');
 const eventDateElement = document.getElementById('event-date');
-const adminPanel = document.getElementById('admin-panel'); // Admin Panel holen
+const adminPanel = document.getElementById('admin-panel');
 
 // Modal Elemente
 const resultModal = document.getElementById('result-modal');
@@ -60,585 +54,523 @@ const resultForm = document.getElementById('result-form');
 const confirmAcceptBtn = document.getElementById('confirm-result-accept-btn');
 const confirmRejectBtn = document.getElementById('confirm-result-reject-btn');
 
+// --- Kernfunktionen (Auth, Daten laden, UI) ---
 
-// --- Hilfsfunktionen ---
-
-// !! PHASE 1: localStorage Speicherung !!
-const saveData = () => {
-    try {
-        localStorage.setItem('pingpong_currentUser', JSON.stringify(currentUser));
-        localStorage.setItem('pingpong_participants', JSON.stringify(participants));
-        // Konvertiere Dates zu ISO Strings vor dem Speichern
-        const dataToSave = JSON.parse(JSON.stringify(tournamentData)); // Deep copy
-        dataToSave.schedule.forEach(m => { if(m.time) m.time = m.time.toISOString(); });
-        localStorage.setItem('pingpong_tournamentData', JSON.stringify(dataToSave));
-        localStorage.setItem('pingpong_nameFilter', nameFilterInput.value);
-        localStorage.setItem('pingpong_finalRanks', JSON.stringify(finalRanks));
-        localStorage.setItem('pingpong_qfLosers', JSON.stringify(quarterFinalLosers));
-    } catch (e) {
-        console.error("Error saving data to localStorage:", e);
-        // Mögliche Ursache: Speicher voll oder Objekt nicht serialisierbar
+// Wird bei Login/Logout aufgerufen
+supabase.auth.onAuthStateChange(async (_event, session) => {
+    if (session && currentSession?.user?.id !== session.user.id) { // Nur bei echtem Wechsel oder erstem Laden
+        console.log('Auth State Changed: User logged in', session.user.id);
+        currentSession = session;
+        await loadUserProfile(session.user.id); // Lade Profil aus 'profiles' Tabelle
+        await loadInitialTournamentData(); // Lade Matches etc.
+    } else if (!session && currentSession) { // Nur wenn vorher eingeloggt
+        console.log('Auth State Changed: User logged out');
+        currentSession = null;
+        currentUserProfile = null;
+        currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} }; // Reset Cache
+        unsubscribeAllRealtime(); // Listener abmelden
+    } else if (session && !currentUserProfile) {
+        // User ist eingeloggt, aber Profil wurde noch nicht geladen (z.B. nach Refresh)
+        console.log('Auth State Stable: User logged in, reloading profile/data');
+        currentSession = session;
+        await loadUserProfile(session.user.id);
+        await loadInitialTournamentData();
     }
-};
+    // Update die UI basierend auf dem neuen Zustand
+    setupInitialView();
+});
 
-const loadData = () => {
-    currentUser = JSON.parse(localStorage.getItem('pingpong_currentUser')) || null;
-    participants = JSON.parse(localStorage.getItem('pingpong_participants')) || [];
-    const loadedTournamentData = JSON.parse(localStorage.getItem('pingpong_tournamentData'));
-    if (loadedTournamentData) {
-        // Konvertiere ISO Strings zurück zu Dates
-         loadedTournamentData.schedule.forEach(m => { if(m.time) m.time = new Date(m.time); });
-         tournamentData = loadedTournamentData;
+// Lädt das Benutzerprofil aus der 'profiles' Tabelle
+async function loadUserProfile(userId) {
+    console.log(`Attempting to load profile for user ID: ${userId}`);
+    const { data, error } = await supabase
+        .from('profiles') // Annahme: Tabelle heisst 'profiles'
+        .select('*')
+        .eq('id', userId) // Annahme: 'id' Spalte in profiles entspricht auth.users.id
+        .single();
+
+    if (error) {
+        console.error('Error loading user profile:', error);
+        // Möglicherweise ist das Profil noch nicht erstellt worden (nach signUp)
+        // Hier könnte Logik stehen, um das Profil anzulegen, falls nicht vorhanden.
+        currentUserProfile = null;
     } else {
-         // Reset auf Default-Struktur falls nichts geladen wurde
-          tournamentData = { groups: [], knockoutMatches: {}, schedule: [], results: {} };
+        currentUserProfile = data;
+        console.log('User profile loaded:', currentUserProfile);
+        // Ggf. Benutzername im Header anzeigen etc.
     }
-    // Initialisiere leere Strukturen, falls sie fehlen
-    tournamentData.groups = tournamentData.groups || [];
-    tournamentData.knockoutMatches = tournamentData.knockoutMatches || {};
-    tournamentData.schedule = tournamentData.schedule || [];
-    tournamentData.results = tournamentData.results || {};
+}
+
+// Lädt initiale Turnierdaten (Matches, Teilnehmer)
+async function loadInitialTournamentData() {
+    console.log("Loading initial tournament data...");
+    // Lade alle Matches für das (aktuelle) Turnier
+    // Annahme: Es gibt nur ein Turnier oder eine ID ist bekannt
+    const { data: matchesData, error: matchesError } = await supabase
+        .from('matches')
+        .select('*'); // Später evtl. filtern nach Turnier-ID
+
+    if (matchesError) {
+        console.error('Error loading matches:', matchesError);
+        currentTournamentData.matches = [];
+    } else {
+        currentTournamentData.matches = matchesData || [];
+        console.log(`Loaded ${currentTournamentData.matches.length} matches.`);
+        // Konvertiere Timestamps aus DB (ISO String) in Date Objekte
+        currentTournamentData.matches.forEach(m => {
+            if (m.scheduled_time) m.time = new Date(m.scheduled_time); // Füge JS Date Objekt hinzu
+        });
+    }
+
+    // Lade alle Teilnehmer-Profile (könnte später optimiert werden)
+    const { data: profilesData, error: profilesError } = await supabase
+        .from('profiles')
+        .select('*'); // Hole alle Profile
+
+    if (profilesError) {
+        console.error('Error loading participants:', profilesError);
+        currentTournamentData.participants = [];
+    } else {
+        currentTournamentData.participants = profilesData || [];
+         console.log(`Loaded ${currentTournamentData.participants.length} participants.`);
+    }
+
+    // Bereite Gruppen und KO-Struktur clientseitig vor (basierend auf geladenen Matches)
+    rebuildClientSideTournamentStructure();
+    // Starte Echtzeit-Listener für unbestätigte Spiele des aktuellen Users
+    subscribeToRelevantMatches();
+
+    // Update UI nach Laden der Daten
+    displayTournamentOverview();
+    displayTournamentPlan(); // Stellt sicher, dass Plan gerendert wird, falls aktiv
+    updateLeaderboard();
+}
+
+// Baut die clientseitigen Strukturen (groups, knockoutMatches) aus der Match-Liste auf
+function rebuildClientSideTournamentStructure() {
+    currentTournamentData.groups = {};
+    currentTournamentData.knockoutMatches = {};
+
+    currentTournamentData.matches.forEach(match => {
+        // Ergebnis-Objekt extrahieren (falls in DB gespeichert)
+        match.result = {
+            score1: match.score1, score2: match.score2,
+            confirmed: match.status === 'confirmed',
+            reportedBy: match.reported_by_id,
+            winner: match.winner_id, loser: match.loser_id
+        };
+
+        if (match.type === 'group' && match.group_id) {
+            if (!currentTournamentData.groups[match.group_id]) {
+                currentTournamentData.groups[match.group_id] = {
+                    id: match.group_id,
+                    players: new Set(), // Verwende Set für eindeutige Spieler
+                    matches: []
+                };
+            }
+            currentTournamentData.groups[match.group_id].matches.push(match.id); // Annahme: `id` ist PK von matches
+            if (match.player1_id) currentTournamentData.groups[match.group_id].players.add(match.player1_id);
+            if (match.player2_id) currentTournamentData.groups[match.group_id].players.add(match.player2_id);
+        } else if (match.round_type) { // KO-Match
+            const roundKey = match.round_type; // z.B. 'ko16', 'koqf'
+            if (!currentTournamentData.knockoutMatches[roundKey]) {
+                currentTournamentData.knockoutMatches[roundKey] = [];
+            }
+            // Füge Match hinzu, falls noch nicht vorhanden (um Duplikate zu vermeiden)
+             if (!currentTournamentData.knockoutMatches[roundKey].some(m => m.id === match.id)) {
+                 // Hier fehlt die winnerTo/loserTo Info aus der DB - muss ggf. mitgeladen werden!
+                 // Füge Match mit seinen DB-Daten hinzu
+                 currentTournamentData.knockoutMatches[roundKey].push({
+                      ...match, // Alle Daten aus der DB
+                      matchId: match.id // Einheitliche ID verwenden
+                 });
+             }
+        }
+    });
+
+    // Konvertiere Set in Array für Gruppen-Spieler
+    Object.values(currentTournamentData.groups).forEach(group => {
+        group.players = Array.from(group.players);
+        // Berechne Standings für jede Gruppe basierend auf geladenen Matches
+        calculateGroupStandings(group.id);
+    });
+
+    console.log("Client-side structure rebuilt:", {
+        groups: currentTournamentData.groups,
+        knockoutMatches: currentTournamentData.knockoutMatches
+    });
+}
 
 
-    nameFilterInput.value = localStorage.getItem('pingpong_nameFilter') || '';
-    finalRanks = JSON.parse(localStorage.getItem('pingpong_finalRanks')) || {};
-    quarterFinalLosers = JSON.parse(localStorage.getItem('pingpong_qfLosers')) || [];
-     // Initialisiere Tischzeiten nach Laden der Daten
-    tableAvailableTimes = Array(12).fill(null);
-    lastKoMatchStartTime = null; // Reset bei jedem Laden
-};
-// !! ENDE PHASE 1 localStorage !!
+// Steuert die initiale UI-Anzeige
+function setupInitialView() {
+    if (currentSession && currentUserProfile) { // Prüfe beides!
+        showScreen(mainScreen);
+        displayTournamentOverview(); // Zeige standardmässig Overview
+        // Ggf. Namen im Header anzeigen
+        // document.getElementById('profile-btn').textContent = currentUserProfile.username || '👤';
+    } else {
+        showScreen(authScreen);
+        showAuthForm(null); // Zeige nur Login/Register Buttons
+    }
+}
 
-const showScreen = (screenToShow) => {
+// Zeigt/versteckt Haupt- oder Auth-Bildschirm
+function showScreen(screenToShow) {
     authScreen.classList.add('hidden');
     mainScreen.classList.add('hidden');
-    screenToShow.classList.remove('hidden');
-};
+    if (screenToShow) {
+        screenToShow.classList.remove('hidden');
+    }
+}
 
-const showAuthForm = (formToShow) => {
+// Zeigt spezifisches Formular im Auth-Bildschirm
+function showAuthForm(formToShow) {
     registerForm.classList.add('hidden');
     loginForm.classList.add('hidden');
-    verifyScreen.classList.add('hidden');
+    verifyScreen.classList.add('hidden'); // Verification Screen nicht mehr benötigt
     if (formToShow) {
         formToShow.classList.remove('hidden');
     }
 }
 
-const showMessage = (elementId, text, isSuccess = false) => {
+// Zeigt Nachrichten an (Fehler oder Erfolg)
+function showMessage(elementId, text, isSuccess = false) {
     const element = document.getElementById(elementId);
-    if(element) {
+    if (element) {
         element.textContent = text;
-        element.className = isSuccess ? 'message success' : 'message';
+        element.className = isSuccess ? 'message success' : 'message error'; // Klassen setzen
     }
 }
 
-const getParticipantById = (id) => participants.find(p => p.id === id);
-const getParticipantByUsername = (username) => participants.find(p => p.username && p.username.toLowerCase() === username.toLowerCase());
-const getParticipantByEmail = (email) => participants.find(p => p.email && p.email.toLowerCase() === email.toLowerCase());
-
-// Helper function to find a KO match by ID across all rounds
-function findKnockoutMatchById(matchId) {
-    if (!matchId) return null;
-    for (const roundKey in tournamentData.knockoutMatches) {
-        const round = tournamentData.knockoutMatches[roundKey];
-        if (Array.isArray(round)) {
-             const match = round.find(m => m.matchId === matchId);
-             if (match) return match;
-        }
-    }
-    return null;
+// Holt Teilnehmerdaten aus dem lokalen Cache
+function getParticipantById(profileId) {
+    if (!profileId) return null;
+    return currentTournamentData.participants.find(p => p.id === profileId);
 }
 
-// --- Initialisierung ---
-document.addEventListener('DOMContentLoaded', () => {
-    loadData(); // Lade Daten aus localStorage (Phase 1)
-    setupInitialView(); // Initialisiere Ansicht
-    updateTournamentOverview(); // Setze Datum etc.
-    addEventListeners(); // Füge alle Event Listener hinzu
-});
 
+// --- Authentifizierungs-Handler (Phase 2 - Supabase) ---
 
-// --- Initialisierungslogik für Ansicht ---
-function setupInitialView() {
-    // Phase 1 Logik (currentUser)
-    if (currentUser && currentUser.verified) {
-        showScreen(mainScreen);
-        displayTournamentOverview();
-    } else if (currentUser && !currentUser.verified) {
-        showScreen(authScreen);
-        showAuthForm(verifyScreen);
-        const emailDisplay = document.getElementById('verify-email-display');
-         if (emailDisplay) emailDisplay.textContent = currentUser.email;
-    }
-    else {
-        showScreen(authScreen);
-        showAuthForm(null);
-    }
-     // Phase 2 Logik (currentSession) - wird später aktiviert
-     /*
-     if (currentSession && currentUserProfile) {
-         showScreen(mainScreen);
-         displayTournamentOverview();
-     } else {
-         showScreen(authScreen);
-         showAuthForm(null);
-     }
-     */
-}
-
-// --- Event Listener hinzufügen ---
-function addEventListeners() {
-    showRegisterBtn.addEventListener('click', () => showAuthForm(registerForm));
-    showLoginBtn.addEventListener('click', () => showAuthForm(loginForm));
-    participateBtn.addEventListener('click', () => {
-        tournamentOverview.classList.add('hidden');
-        tournamentPlan.classList.remove('hidden');
-        displayTournamentPlan();
-    });
-
-    document.querySelector('#main-screen header h1').addEventListener('click', () => {
-        if(mainScreen.classList.contains('hidden')) return;
-        tournamentPlan.classList.add('hidden');
-        tournamentOverview.classList.remove('hidden');
-        displayTournamentOverview();
-    });
-
-    registerForm.addEventListener('submit', handleRegister);
-    loginForm.addEventListener('submit', handleLogin);
-    document.getElementById('verify-submit-btn')?.addEventListener('click', handleVerify); // Sicherstellen, dass Button existiert
-
-    nameFilterInput.addEventListener('input', () => {
-        if (!localStorage) saveData(); // Filter speichern (Phase 1)
-        displayTournamentPlan();
-    });
-
-    // Modals
-    closeResultModalBtn?.addEventListener('click', () => resultModal.classList.add('hidden'));
-    closeConfirmModalBtn?.addEventListener('click', () => confirmModal.classList.add('hidden'));
-    resultForm.addEventListener('submit', handleResultSubmit);
-    confirmAcceptBtn?.addEventListener('click', handleConfirmAccept);
-    confirmRejectBtn?.addEventListener('click', handleConfirmReject);
-
-    // Admin Buttons
-    document.getElementById('generate-tournament-btn')?.addEventListener('click', handleGenerateTournament);
-    document.getElementById('seed-ko-btn')?.addEventListener('click', handleSeedKo);
-}
-
-// --- Authentifizierungs-Handler (Phase 1) ---
-function handleRegister(e) {
+async function handleRegister(e) {
     e.preventDefault();
-    // ... (Code zum Holen der Werte aus dem Formular) ...
-     const firstName = document.getElementById('register-firstname').value.trim();
+    // Hole Formulardaten
+    const firstName = document.getElementById('register-firstname').value.trim();
     const lastName = document.getElementById('register-lastname').value.trim();
     const username = document.getElementById('register-username').value.trim();
     const email = document.getElementById('register-email').value.trim();
     const phone = document.getElementById('register-phone').value.trim();
     const password = document.getElementById('register-password').value;
 
-    // Validierung ...
-     if (!firstName || !lastName || !username || !email || !phone || !password) {
-         showMessage('register-message', 'Bitte alle Felder ausfüllen.'); return;
-     }
-     if (password.length < 6) {
-         showMessage('register-message', 'Passwort muss mind. 6 Zeichen lang sein.'); return;
-     }
-     if (getParticipantByUsername(username)) {
-         showMessage('register-message', 'Benutzername bereits vergeben.'); return;
-     }
-      if (getParticipantByEmail(email)) {
-         showMessage('register-message', 'E-Mailadresse bereits registriert.'); return;
-     }
-
-
-    const newUser = {
-        id: `user_${Date.now()}`, // Einfache eindeutige ID für Phase 1
-        firstname: firstName, lastname: lastName, username: username,
-        email: email, phone: phone, password: password, // !! KLARTEXT PASSWORT NUR FÜR PHASE 1 !!
-        verified: false,
-        verificationCode: Math.floor(100000 + Math.random() * 900000).toString()
-    };
-
-    participants.push(newUser);
-    currentUser = newUser;
-    saveData();
-
-    console.log(`Simulierter Verifizierungscode für ${email}: ${newUser.verificationCode}`);
-    showMessage('register-message', `Registrierung erfolgreich! Code (simuliert): ${newUser.verificationCode}`, true);
-
-    document.getElementById('verify-email-display').textContent = email;
-    showAuthForm(verifyScreen);
-}
-
-function handleVerify() {
-    const codeInput = document.getElementById('verify-code').value.trim();
-    if (!currentUser) return;
-
-    if (codeInput === currentUser.verificationCode) {
-        currentUser.verified = true;
-        const userIndex = participants.findIndex(p => p.id === currentUser.id);
-        if (userIndex !== -1) participants[userIndex].verified = true;
-        saveData();
-        showMessage('verify-message', 'Verifizierung erfolgreich! Du wirst angemeldet.', true);
-        setTimeout(() => { setupInitialView(); }, 1500);
-    } else {
-        showMessage('verify-message', 'Falscher Verifizierungscode.');
-    }
-}
-
-function handleLogin(e) {
-    e.preventDefault();
-    // ... (Code zum Holen der Werte aus dem Formular) ...
-    const loginIdentifier = document.getElementById('login-username').value.trim().toLowerCase();
-    const password = document.getElementById('login-password').value;
-
-    const user = participants.find(p =>
-        (p.username.toLowerCase() === loginIdentifier || p.email.toLowerCase() === loginIdentifier) &&
-        p.password === password // !! NUR FÜR PHASE 1 !!
-    );
-
-    if (user) {
-        if (user.verified) {
-            showMessage('login-message', 'Anmeldung erfolgreich!', true);
-            currentUser = user;
-            saveData();
-            setTimeout(() => { setupInitialView(); }, 1000);
-        } else {
-            currentUser = user; // Für Verifizierung setzen
-            saveData();
-            showMessage('login-message', 'Konto noch nicht verifiziert. Code (simuliert): ' + user.verificationCode);
-             setTimeout(() => {
-                 document.getElementById('verify-email-display').textContent = user.email;
-                 showAuthForm(verifyScreen);
-             }, 1500);
-        }
-    } else {
-        showMessage('login-message', 'Ungültiger Benutzername/E-Mail oder falsches Passwort.');
-    }
-}
-
-// --- Turnierplan-Anzeige ---
-function updateTournamentOverview() {
-     const today = new Date();
-     const formattedDate = `<span class="math-inline">\{today\.getDate\(\)\.toString\(\)\.padStart\(2, '0'\)\}\.</span>{(today.getMonth() + 1).toString().padStart(2, '0')}.${today.getFullYear()}`;
-     if(eventDateElement) eventDateElement.textContent = formattedDate;
-     updateLeaderboard();
- }
-
- function displayTournamentOverview() {
-     tournamentOverview.classList.remove('hidden');
-     tournamentPlan.classList.add('hidden');
-     updateLeaderboard();
- }
-
- function displayTournamentPlan() {
-     if (!tournamentData || !tournamentData.groups) {
-         console.error("Turnierdaten nicht korrekt geladen.");
-         groupStageContainer.innerHTML = '<p>Fehler beim Laden der Turnierdaten.</p>';
-         knockoutStageContainer.innerHTML = '';
-         return;
-     }
-     console.log("Anzeige Turnierplan mit Filter:", nameFilterInput.value);
-     renderGroupStage();
-     renderKnockoutStage();
-     addResultButtonListeners();
- }
-
-// --- Rendering Funktionen (Gruppen, KO-Baum) ---
-// (Hier renderGroupStage und renderKnockoutStage einfügen, wie im vorherigen Code)
-function renderGroupStage() {
-    if(!groupStageContainer) return;
-    groupStageContainer.innerHTML = ''; // Alten Inhalt leeren
-    const filter = nameFilterInput.value.toLowerCase().trim();
-
-    if (!tournamentData.groups || tournamentData.groups.length === 0) {
-        groupStageContainer.innerHTML = "<p>Noch keine Gruppen generiert.</p>";
+    // Validierungen (wie vorher) ...
+    if (!firstName || !lastName || !username || !email || !phone || !password || password.length < 6) {
+        showMessage('register-message', 'Bitte alle Felder korrekt ausfüllen (Passwort mind. 6 Zeichen).');
         return;
     }
 
+    showMessage('register-message', 'Registrierung wird verarbeitet...', false);
 
-    tournamentData.groups.forEach(group => {
-         // Stelle sicher, dass standings verfügbar sind (berechne sie ggf. neu)
-         if (!group.standings && group.matches.every(mid => tournamentData.results[mid]?.confirmed)) {
-              calculateGroupStandings(group.id); // Neuberechnung, falls alle Spiele fertig sind
-         }
-         const standings = group.standings || []; // Verwende berechnete oder leere Standings
+    const { data, error } = await supabase.auth.signUp({
+        email: email,
+        password: password,
+        options: {
+            // Diese Daten landen in auth.users.raw_user_meta_data
+            // EMPFEHLUNG: Supabase Trigger erstellen, der diese Daten
+            // automatisch in deine 'profiles' Tabelle kopiert, wenn ein neuer User erstellt wird!
+            data: {
+                username: username,
+                firstname: firstName,
+                lastname: lastName,
+                phone: phone,
+                // Optional: Flag setzen, dass Profil erstellt werden muss
+                profile_needs_setup: true
+            }
+        }
+    });
 
-        const groupPlayers = group.players.map(getParticipantById).filter(p => p); // Filtern falls ein Spieler nicht gefunden wird
-        const groupMatchesFilter = !filter || groupPlayers.some(p =>
-              p.firstname.toLowerCase().includes(filter) ||
-              p.lastname.toLowerCase().includes(filter) ||
-              p.username.toLowerCase().includes(filter)
-        );
+    if (error) {
+        console.error("Signup Error:", error);
+        showMessage('register-message', `Registrierungsfehler: ${error.message}`);
+    } else {
+        console.log("Signup successful:", data);
+        // Wenn E-Mail Bestätigung in Supabase AKTIVIERT ist:
+        if (data.user?.identities?.length === 0) { // Oder prüfe spezifische Property
+             showMessage('register-message', 'Registrierung fast abgeschlossen! Bitte prüfe dein E-Mail Postfach und klicke auf den Bestätigungslink.', true);
+             showAuthForm(loginForm); // Zeige Login Form nach erfolgreicher Registrierung
+        } else {
+        // Wenn E-Mail Bestätigung DEAKTIVIERT ist:
+             showMessage('register-message', 'Registrierung erfolgreich! Du kannst dich jetzt anmelden.', true);
+             showAuthForm(loginForm); // Zeige Login Form
+        }
+        // Kein automatischer Login, User muss sich anmelden. onAuthStateChange reagiert dann.
+    }
+}
 
-        if (!groupMatchesFilter) return; // Gruppe überspringen
+async function handleLogin(e) {
+    e.preventDefault();
+    const loginIdentifier = document.getElementById('login-username').value.trim(); // E-Mail oder Username? Annahme: E-Mail
+    const password = document.getElementById('login-password').value;
+
+    showMessage('login-message', 'Anmeldung wird geprüft...', false);
+
+    // Versuche Login mit E-Mail
+    const { data, error } = await supabase.auth.signInWithPassword({
+        email: loginIdentifier,
+        password: password,
+    });
+
+    // TODO: Wenn Login per E-Mail fehlschlägt, könnte man versuchen, den User anhand des Usernamens
+    // in der 'profiles' Tabelle zu finden und dann dessen E-Mail für den Login zu verwenden.
+    // Erfordert eine zusätzliche Abfrage.
+
+    if (error) {
+        console.error("Login Error:", error);
+        showMessage('login-message', `Login fehlgeschlagen: ${error.message}`);
+    } else {
+        console.log("Login successful:", data);
+        showMessage('login-message', 'Login erfolgreich!', true);
+        // UI wird durch onAuthStateChange aktualisiert, sobald Profil geladen ist
+    }
+}
+
+async function handleLogout() {
+    console.log("Logging out...");
+    unsubscribeAllRealtime(); // Wichtig: Listener abmelden
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+        console.error("Logout Error:", error);
+        alert(`Logout fehlgeschlagen: ${error.message}`);
+    } else {
+        console.log("Logout successful");
+        // UI wird durch onAuthStateChange aktualisiert
+    }
+}
+
+// --- UI Update Funktionen ---
+
+function updateTournamentOverview() {
+    const today = new Date();
+    const formattedDate = `${today.getDate().toString().padStart(2, '0')}.${(today.getMonth() + 1).toString().padStart(2, '0')}.${today.getFullYear()}`;
+    if (eventDateElement) eventDateElement.textContent = formattedDate;
+    updateLeaderboard(); // Ruft die neue Leaderboard-Funktion auf
+}
+
+function displayTournamentOverview() {
+    tournamentOverview.classList.remove('hidden');
+    tournamentPlan.classList.add('hidden');
+    updateLeaderboard();
+}
+
+function displayTournamentPlan() {
+    tournamentPlan.classList.remove('hidden');
+    tournamentOverview.classList.add('hidden'); // Verstecke Overview, wenn Plan angezeigt wird
+    if (!currentTournamentData || !currentTournamentData.matches) {
+        console.error("Turnierdaten (Matches) nicht verfügbar für Anzeige.");
+        groupStageContainer.innerHTML = '<p>Turnierdaten werden geladen...</p>';
+        knockoutStageContainer.innerHTML = '';
+        return;
+    }
+    // Rendere Gruppen und KO basierend auf den Daten in currentTournamentData
+    renderGroupStage();
+    renderKnockoutStage();
+    addResultButtonListeners(); // Füge Listener *nach* dem Rendern hinzu
+}
+
+// --- Rendering Funktionen (leicht angepasst für Profil-Daten) ---
+
+function renderGroupStage() {
+    if (!groupStageContainer) return;
+    groupStageContainer.innerHTML = '';
+    const filter = nameFilterInput.value.toLowerCase().trim();
+
+    // Iteriere über die clientseitig erstellte Gruppenstruktur
+    const groups = Object.values(currentTournamentData.groups);
+
+    if (groups.length === 0) {
+        groupStageContainer.innerHTML = "<p>Noch keine Gruppen vorhanden.</p>";
+        return;
+    }
+
+    groups.sort((a,b) => a.id.localeCompare(b.id)); // Sortiere Gruppen A, B, C...
+
+    groups.forEach(group => {
+        // Standings sollten schon berechnet sein in rebuildClientSideTournamentStructure
+        const standings = group.standings || [];
+        const groupPlayers = group.players.map(getParticipantById).filter(p => p); // Hole Profile
+
+        // Filterung (wie vorher) ...
+         const groupMatchesFilter = !filter || groupPlayers.some(p =>
+               (p.firstname && p.firstname.toLowerCase().includes(filter)) ||
+               (p.lastname && p.lastname.toLowerCase().includes(filter)) ||
+               (p.username && p.username.toLowerCase().includes(filter))
+         );
+         if (!groupMatchesFilter && filter) return;
+
 
         const groupDiv = document.createElement('div');
         groupDiv.classList.add('group');
         groupDiv.innerHTML = `<h4>Gruppe ${group.id}</h4>`;
 
-        // Spieltabelle
+        // Tabelle mit Standings rendern
         const table = document.createElement('table');
         table.innerHTML = `<thead><tr><th>#</th><th>Spieler</th><th>Pkt</th><th>+/-</th><th>Sp</th></tr></thead><tbody></tbody>`;
         const tbody = table.querySelector('tbody');
-
-         // Verwende die sortierten standings zur Anzeige
-         standings.forEach((standing, index) => {
-             const player = getParticipantById(standing.id);
-             if(player) {
+        standings.forEach((standing, index) => {
+            const player = getParticipantById(standing.id); // Hole Profil
+            if (player) {
                 tbody.innerHTML += `<tr>
-                    <td><span class="math-inline">\{standing\.rank \|\| \(index \+ 1\)\}</td\>
-<td>${player.firstname} ${player.lastname}</td>
-<td>${standing.points}</td>
-<td>
-  ${standing.pointDiff > 0 ? '+' : ''}${standing.pointDiff}
-</td>
-<td>${standing.gamesPlayed}</td>
-</tr>;
-}
-});
-
-// Füge Spieler hinzu, die evtl. noch nicht im Standing sind (falls Tabelle vor Ende angezeigt wird)
-groupPlayers.forEach(player => {
-  if (!standings.some(s => s.id === player.id)) {
-    tbody.innerHTML += `
-      <tr>
-        <td>-</td>
-        <td>${player.firstname} ${player.lastname}</td>
-        <td>0</td>
-        <td>0</td>
-        <td>0</td>
-      </tr>
-    `;
-  }
-});
-
+                    <td>${standing.rank || (index + 1)}</td>
+                    <td>${player.firstname || ''} ${player.lastname || ''} (${player.username || 'N/A'})</td>
+                    <td>${standing.points ?? 0}</td>
+                    <td>${(standing.pointDiff ?? 0) > 0 ? '+' : ''}${standing.pointDiff ?? 0}</td>
+                    <td>${standing.gamesPlayed ?? 0}</td>
+                </tr>`;
+            }
+        });
         groupDiv.appendChild(table);
 
-        // Matches der Gruppe anzeigen
+        // Matches der Gruppe rendern
         const matchesUl = document.createElement('ul');
         matchesUl.classList.add('match-list');
-        group.matches.forEach(matchId => {
-            const match = tournamentData.schedule.find(s => s.matchId === matchId);
-            if (!match) return;
+        // Finde die Matches für diese Gruppe in den globalen Daten
+        const groupMatchObjects = currentTournamentData.matches.filter(m => m.type === 'group' && m.group_id === group.id);
+        groupMatchObjects.sort((a,b) => (a.time || 0) - (b.time || 0)); // Sortiere nach Zeit
 
-            const player1 = getParticipantById(match.player1);
-            const player2 = getParticipantById(match.player2);
-            if (!player1 || !player2) return; // Spieler nicht gefunden
+        groupMatchObjects.forEach(match => {
+            const player1 = getParticipantById(match.player1_id);
+            const player2 = getParticipantById(match.player2_id);
+            if (!player1 || !player2) return; // Überspringe, falls Spieler nicht geladen
 
+             // Filterung für Match (wie vorher) ...
             const matchMatchesFilter = !filter ||
-                player1.firstname.toLowerCase().includes(filter) || player1.lastname.toLowerCase().includes(filter) || player1.username.toLowerCase().includes(filter) ||
-                player2.firstname.toLowerCase().includes(filter) || player2.lastname.toLowerCase().includes(filter) || player2.username.toLowerCase().includes(filter);
+                 (player1.firstname && player1.firstname.toLowerCase().includes(filter)) || (player1.lastname && player1.lastname.toLowerCase().includes(filter)) || (player1.username && player1.username.toLowerCase().includes(filter)) ||
+                 (player2.firstname && player2.firstname.toLowerCase().includes(filter)) || (player2.lastname && player2.lastname.toLowerCase().includes(filter)) || (player2.username && player2.username.toLowerCase().includes(filter));
+             if(!matchMatchesFilter && filter) return;
 
-            if(!matchMatchesFilter && filter) return; // Match überspringen
-
-            const result = tournamentData.results[matchId] || { score1: null, score2: null, confirmed: false };
+            const result = match.result || { score1: null, score2: null, confirmed: false };
             const timeStr = match.time ? match.time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '--:--';
-            const tableStr = match.table ? `T${match.table}` : '';
+            const tableStr = match.table_number ? `T${match.table_number}` : '';
 
             const li = document.createElement('li');
             li.innerHTML = `
-                <span>${timeStr} <span class="math-inline">\{tableStr\}</span\> \-
-<span>${player1.username}</span> vs
-<span>${player2.username}</span>
-<span class="match-result">
-  ${
-    result.score1 !== null && result.score2 !== null
-      ? `${result.score1} : ${result.score2} ${result.confirmed ? '✔️' : '❓'}`
-      : '-:-'
-  }
-</span>
-<button 
-  class="result-btn" 
-  data-match-id="${matchId}" 
-  ${result.confirmed ? 'disabled' : ''}
->
-  Ergebnis
-</button>
-`;
-matchesUl.appendChild(li);
-});
-groupDiv.appendChild(matchesUl);
-                groupStageContainer.appendChild(groupDiv);
+                <span>${timeStr} ${tableStr}</span> -
+                <span>${player1.username || 'N/A'}</span> vs
+                <span>${player2.username || 'N/A'}</span>
+                <span class="match-result">${result.score1 !== null ? `${result.score1} : ${result.score2} ${result.confirmed ? '✔️' : '❓'}` : '-:-'}</span>
+                <button class="result-btn" data-match-id="${match.id}" ${result.confirmed ? 'disabled' : ''}>Ergebnis</button>
+            `;
+            matchesUl.appendChild(li);
+        });
+        groupDiv.appendChild(matchesUl);
+        groupStageContainer.appendChild(groupDiv);
     });
 }
 
- function renderKnockoutStage() {
-     if(!knockoutStageContainer) return;
-     knockoutStageContainer.innerHTML = ''; // Leeren
-      const filter = nameFilterInput.value.toLowerCase().trim();
+function renderKnockoutStage() {
+    if (!knockoutStageContainer) return;
+    knockoutStageContainer.innerHTML = '';
+    const filter = nameFilterInput.value.toLowerCase().trim();
 
-     // Hilfsfunktion zum Rendern einer Runde
-     const renderRound = (roundKey, title) => {
-         const roundData = tournamentData.knockoutMatches[roundKey];
-         const roundDiv = document.getElementById(`ko-round-${roundKey.replace('ko','')}`) || document.createElement('div'); // Finde oder erstelle Container
-         roundDiv.innerHTML = `<h4>${title}</h4>`; // Setze Titel immer neu
+    const renderRound = (roundKey, title) => {
+        const roundData = currentTournamentData.knockoutMatches[roundKey];
+        const roundDiv = document.createElement('div'); // Immer neu erstellen
+        roundDiv.className = 'ko-round';
+        roundDiv.id = `ko-round-${roundKey}`;
+        roundDiv.innerHTML = `<h4>${title}</h4>`;
 
-         if (!roundData || roundData.length === 0) {
-             roundDiv.innerHTML += '<p>Spiele werden noch generiert...</p>';
-             return roundDiv; // Gebe Div zurück
-         }
+        if (!roundData || roundData.length === 0) {
+            roundDiv.innerHTML += '<p>Spiele werden noch generiert/geladen...</p>';
+            return roundDiv;
+        }
 
-         roundData.forEach(match => {
-             const player1 = match.player1 ? getParticipantById(match.player1) : null;
-             const player2 = match.player2 ? getParticipantById(match.player2) : null;
+        // Sortiere Matches innerhalb der Runde (optional, z.B. nach ID oder geplanter Zeit)
+         roundData.sort((a,b) => a.matchId.localeCompare(b.matchId)); // Einfache Sortierung nach ID
 
-             // Filter anwenden
-              const matchMatchesFilter = !filter ||
-                   (player1 && (player1.firstname.toLowerCase().includes(filter) || player1.lastname.toLowerCase().includes(filter) || player1.username.toLowerCase().includes(filter))) ||
-                   (player2 && (player2.firstname.toLowerCase().includes(filter) || player2.lastname.toLowerCase().includes(filter) || player2.username.toLowerCase().includes(filter)));
+        roundData.forEach(match => {
+            const player1 = match.player1_id ? getParticipantById(match.player1_id) : null;
+            const player2 = match.player2_id ? getParticipantById(match.player2_id) : null;
 
-              if(!matchMatchesFilter && filter && player1 && player2) return; // Match überspringen, nur wenn Filter aktiv UND beide Spieler bekannt sind
-
-
-             const result = tournamentData.results[match.matchId] || { score1: null, score2: null, confirmed: false };
-             const timeStr = match.time ? match.time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '--:--';
-              const tableStr = match.table ? `T${match.table}` : '';
-
-             const matchDiv = document.createElement('div');
-             matchDiv.classList.add('ko-match');
-             matchDiv.innerHTML = `
-                 <div class="ko-time-table">${timeStr} <span class="math-inline">\{tableStr\}</div\>
-                 <div class="ko-players">
-  <span>
-    ${player1 
-      ? player1.username 
-      : (match.player1 
-        ? '<i>Spieler wird ermittelt</i>' 
-        : '<i>TBD</i>')}
-  </span>
-  <span>
-    ${player2 
-      ? player2.username 
-      : (match.player2 
-        ? '<i>Spieler wird ermittelt</i>' 
-        : '<i>TBD</i>')}
-  </span>
-</div>
-<div class="ko-result">
-  ${
-    result.score1 !== null && result.score2 !== null
-      ? `${result.score1} : ${result.score2} ${result.confirmed ? '✔️' : '❓'}`
-      : '-:-'
-  }
-</div>
-<button 
-  class="result-btn" 
-  data-match-id="${match.matchId}" 
-  ${result.confirmed || !player1 || !player2 ? 'disabled' : ''}
->
-  Ergebnis
-</button>
-`;
-roundDiv.appendChild(matchDiv);
-});
-return roundDiv;
-};
-// Container im HTML finden oder erstellen
-     const bracketContainer = knockoutStageContainer.querySelector('.ko-bracket') || document.createElement('div');
-     bracketContainer.className = 'ko-bracket';
-     const placementsContainer = knockoutStageContainer.querySelector('.ko-placements') || document.createElement('div');
-     placementsContainer.className = 'ko-placements';
-
-      // Runden rendern und an Container anhängen
-     if(tournamentData.knockoutMatches.round16) bracketContainer.appendChild(renderRound('round16', 'Sechzehntelfinale'));
-     if(tournamentData.knockoutMatches.quarter) bracketContainer.appendChild(renderRound('quarter', 'Viertelfinale'));
-     if(tournamentData.knockoutMatches.semi) bracketContainer.appendChild(renderRound('semi', 'Halbfinale'));
-     if(tournamentData.knockoutMatches.final) bracketContainer.appendChild(renderRound('final', 'Finale'));
-
-     if(tournamentData.knockoutMatches.place3) placementsContainer.appendChild(renderRound('place3', 'Spiel um Platz 3'));
-     if(tournamentData.knockoutMatches.place58_semi) placementsContainer.appendChild(renderRound('place58_semi', 'Platz 5-8 Halbfinale'));
-     if(tournamentData.knockoutMatches.place7) placementsContainer.appendChild(renderRound('place7', 'Spiel um Platz 7'));
-     if(tournamentData.knockoutMatches.place5) placementsContainer.appendChild(renderRound('place5', 'Spiel um Platz 5'));
+             // Filterung (wie vorher) ...
+             const matchMatchesFilter = !filter ||
+                   (player1 && ((player1.firstname && player1.firstname.toLowerCase().includes(filter)) || (player1.lastname && player1.lastname.toLowerCase().includes(filter)) || (player1.username && player1.username.toLowerCase().includes(filter)))) ||
+                   (player2 && ((player2.firstname && player2.firstname.toLowerCase().includes(filter)) || (player2.lastname && player2.lastname.toLowerCase().includes(filter)) || (player2.username && player2.username.toLowerCase().includes(filter))));
+              if(!matchMatchesFilter && filter && (player1 || player2)) return; // Überspringe nur, wenn Filter aktiv und mind. ein Spieler bekannt ist
 
 
-     // Sicherstellen, dass Container im DOM sind
-     if (!knockoutStageContainer.contains(bracketContainer)) knockoutStageContainer.appendChild(bracketContainer);
-     if (!knockoutStageContainer.contains(placementsContainer)) knockoutStageContainer.appendChild(placementsContainer);
- }
+            const result = match.result || { score1: null, score2: null, confirmed: false };
+            const timeStr = match.time ? match.time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+            const tableStr = match.table_number ? `T${match.table_number}` : '';
 
+            const matchDiv = document.createElement('div');
+            matchDiv.classList.add('ko-match');
+            matchDiv.innerHTML = `
+                <div class="ko-time-table">${timeStr} ${tableStr}</div>
+                <div class="ko-players">
+                    <span>${player1 ? player1.username : (match.player1_id ? '<i>Wartet auf Spieler</i>' : '<i>TBD</i>')}</span>
+                    <span>${player2 ? player2.username : (match.player2_id ? '<i>Wartet auf Spieler</i>' : '<i>TBD</i>')}</span>
+                </div>
+                <div class="ko-result">${result.score1 !== null ? `${result.score1} : ${result.score2} ${result.confirmed ? '✔️' : '❓'}` : '-:-'}</div>
+                <button class="result-btn" data-match-id="${match.id}" ${result.confirmed || !player1 || !player2 ? 'disabled' : ''}>Ergebnis</button>
+            `;
+            roundDiv.appendChild(matchDiv);
+        });
+        return roundDiv;
+    };
 
-// --- Leaderboard ---
-// (Hier updateLeaderboard Funktion einfügen)
-function updateLeaderboard() {
-    if(!leaderboardList) return;
-    leaderboardList.innerHTML = ''; // Leeren
+    const bracketContainer = document.createElement('div');
+    bracketContainer.className = 'ko-bracket';
+    const placementsContainer = document.createElement('div');
+    placementsContainer.className = 'ko-placements';
+
+    // Rendere vorhandene Runden
+    if (currentTournamentData.knockoutMatches.round16) bracketContainer.appendChild(renderRound('round16', 'Sechzehntelfinale'));
+    if (currentTournamentData.knockoutMatches.quarter) bracketContainer.appendChild(renderRound('quarter', 'Viertelfinale'));
+    if (currentTournamentData.knockoutMatches.semi) bracketContainer.appendChild(renderRound('semi', 'Halbfinale'));
+    if (currentTournamentData.knockoutMatches.final) bracketContainer.appendChild(renderRound('final', 'Finale'));
+
+    if (currentTournamentData.knockoutMatches.place3) placementsContainer.appendChild(renderRound('place3', 'Spiel um Platz 3'));
+    if (currentTournamentData.knockoutMatches.place58_semi) placementsContainer.appendChild(renderRound('place58_semi', 'Platz 5-8 Halbfinale'));
+    if (currentTournamentData.knockoutMatches.place7) placementsContainer.appendChild(renderRound('place7', 'Spiel um Platz 7'));
+    if (currentTournamentData.knockoutMatches.place5) placementsContainer.appendChild(renderRound('place5', 'Spiel um Platz 5'));
+
+    knockoutStageContainer.appendChild(bracketContainer);
+    knockoutStageContainer.appendChild(placementsContainer);
+}
+
+// --- Leaderboard (Phase 2 - Nutzt aktuelle Daten) ---
+async function updateLeaderboard() {
+    if (!leaderboardList) return;
+    leaderboardList.innerHTML = '<li>Lade Leaderboard...</li>';
+
+    // Hole die neuesten Daten, falls nötig, oder verwende Cache
+    // Fürs Erste verwenden wir den Cache currentTournamentData.participants und currentTournamentData.matches
+    const participantsProfiles = currentTournamentData.participants;
+    const allMatches = currentTournamentData.matches;
+
     let rankedPlayers = [];
 
-    // Phase 1: Nehme direkt 'participants'
-    const currentParticipants = participants.filter(p => p.verified);
-    // Phase 2: Würde Teilnehmer aus DB laden
-
-    currentParticipants.forEach(p => {
+    participantsProfiles.forEach(p => {
         let playerInfo = {
-            participant: p,
+            participant: p, // Enthält id, username, firstname, lastname etc.
             status: 'Registriert',
             rank: Infinity,
-            finalRank: finalRanks[p.id] || null,
+            finalRank: null, // Wird später aus Match-Ergebnissen bestimmt
             groupInfo: findParticipantGroupInfo(p.id) || { points: 0, pointDiff: 0, rank: Infinity, groupId: 'N/A' },
             progressScore: 0
         };
 
-        // Fortschritt und Status ermitteln (wie im vorherigen Code-Block)
-         let highestRoundReached = 0;
-         let currentStatus = `Gruppe ${playerInfo.groupInfo.groupId} Rang ${playerInfo.groupInfo.rank || '?'}`;
-         playerInfo.progressScore = 100 + (100 - (playerInfo.groupInfo.rank || 100));
+        // Finde finalen Rang, falls vorhanden (z.B. durch Abfrage der Matches-Tabelle nach winner/loser in Finalspielen)
+        // TODO: Logik zur Ermittlung des finalen Rangs aus den Match-Daten implementieren
+        // playerInfo.finalRank = calculateFinalRankFromMatches(p.id, allMatches);
 
-         let foundProgress = false;
-         for (const roundKey of ['kof', 'ko3p', 'ko5p', 'ko7p', 'kosf', 'koqf', 'ko58sf', 'ko16']) {
-             if (!tournamentData.knockoutMatches || !tournamentData.knockoutMatches[roundKey]) continue;
-
-             for (const match of tournamentData.knockoutMatches[roundKey]) {
-                 const checkPlayerInMatch = (m) => m && (m.player1 === p.id || m.player2 === p.id);
-                 const getPlayerResultInMatch = (m) => {
-                     if (!m || !m.result?.confirmed || !checkPlayerInMatch(m)) return 'playing';
-                     return m.result.winner === p.id ? 'won' : 'lost';
-                 }
-
-                 if (checkPlayerInMatch(match)) {
-                     const result = getPlayerResultInMatch(match);
-                     const roundScoreValue = getRoundScoreValue(roundKey);
-
-                     if (result === 'won') {
-                         playerInfo.progressScore = Math.max(playerInfo.progressScore, roundScoreValue + 1);
-                         if (['kof', 'ko3p', 'ko5p', 'ko7p'].includes(roundKey)) {
-                              currentStatus = `Abgeschlossen (${finalRanks[p.id]}. Platz)`;
-                         } else {
-                              const nextMatch = findKnockoutMatchById(match.winnerTo);
-                              currentStatus = nextMatch ? `Wartet auf ${nextMatch.type}` : `Gewinner ${roundKey}`;
-                         }
-                         foundProgress = true; break;
-                     } else if (result === 'lost') {
-                         playerInfo.progressScore = Math.max(playerInfo.progressScore, roundScoreValue);
-                         if (['kof', 'ko3p', 'ko5p', 'ko7p'].includes(roundKey)) {
-                              currentStatus = `Abgeschlossen (${finalRanks[p.id]}. Platz)`;
-                         } else if (match.loserTo) {
-                              const nextMatch = findKnockoutMatchById(match.loserTo);
-                              currentStatus = nextMatch ? `Wartet auf ${nextMatch.type}` : `Verlierer ${roundKey}`;
-                         } else {
-                             currentStatus = `Ausgeschieden in ${roundKey}`;
-                         }
-                         foundProgress = true; break;
-                     } else { // 'playing'
-                         playerInfo.progressScore = Math.max(playerInfo.progressScore, roundScoreValue);
-                         currentStatus = `Spielend in ${roundKey}`; // (${match.matchId})
-                         foundProgress = true; break;
-                     }
-                 }
-             }
-             if(foundProgress) break;
-         }
-         playerInfo.status = currentStatus;
-
-         // Status überschreiben falls finaler Rang existiert
-          if (playerInfo.finalRank) {
-              playerInfo.status = `Finished ${playerInfo.finalRank}.`;
-              playerInfo.progressScore = 10000 - playerInfo.finalRank;
-         }
+        // Fortschritt und Status ermitteln (ähnlich wie Phase 1, aber mit DB-Daten)
+        // Diese Logik muss ggf. die `allMatches`-Liste durchsuchen
+        // ... (Detail-Logik zur Statusermittlung hier einfügen) ...
 
         rankedPlayers.push(playerInfo);
     });
 
-    // Sortieren (wie im vorherigen Code-Block)
+    // Sortieren (wie vorher, aber mit Daten aus playerInfo)
     rankedPlayers.sort((a, b) => {
         if (a.finalRank && b.finalRank) return a.finalRank - b.finalRank;
         if (a.finalRank) return -1;
@@ -648,781 +580,710 @@ function updateLeaderboard() {
         const groupB = b.groupInfo || {};
         if (groupA.points !== groupB.points) return groupB.points - groupA.points;
         if (groupA.pointDiff !== groupB.pointDiff) return groupB.pointDiff - groupA.pointDiff;
-        return a.participant.username.localeCompare(b.participant.username);
+        return (a.participant.username || '').localeCompare(b.participant.username || '');
     });
 
-
     // Anzeigen
-    const listContent = document.getElementById('leaderboard-list');
-    if(!listContent) return;
-    listContent.innerHTML = ''; // Leeren
-
+    leaderboardList.innerHTML = ''; // Leeren
     if (rankedPlayers.length === 0) {
-        listContent.innerHTML = '<li>Noch keine Teilnehmer oder Ergebnisse.</li>';
+        leaderboardList.innerHTML = '<li>Keine Teilnehmer gefunden.</li>';
         return;
     }
     rankedPlayers.forEach((rp, index) => {
         const li = document.createElement('li');
         const displayRank = rp.finalRank ? `${rp.finalRank}.` : `${index + 1}.`;
-        li.textContent = `${displayRank} ${rp.participant.firstname} <span class="math-inline">\{rp\.participant\.lastname\} \(</span>{rp.participant.username}) - ${rp.status}`;
-        // Optional: Füge hier mehr Details hinzu, wenn gewünscht
-        // li.textContent += ` | Grp: P${rp.groupInfo.points} D${rp.groupInfo.pointDiff}`;
-        listContent.appendChild(li);
+        li.textContent = `${displayRank} ${rp.participant.firstname || ''} ${rp.participant.lastname || ''} (${rp.participant.username || 'N/A'}) - ${rp.status}`;
+        leaderboardList.appendChild(li);
     });
 }
-// Hilfsfunktion für Wertigkeit der Runden (höher ist besser)
-function getRoundScoreValue(roundKey) {
-    const scores = { 'ko16': 100, 'koqf': 200, 'ko58sf': 250, 'kosf': 300, 'ko7p': 350, 'ko5p': 360, 'ko3p': 370, 'kof': 400 };
-    return scores[roundKey] || 0;
-}
 
 
-// --- Ergebnis-Handling ---
-// (Hier handleResultButtonClick, handleResultSubmit, handleConfirmAccept, handleConfirmReject einfügen)
+// --- Ergebnis-Handling (Phase 2 - Supabase) ---
+
+// Wird aufgerufen, wenn User auf "Ergebnis" klickt
 function handleResultButtonClick(event) {
-     const matchId = event.target.getAttribute('data-match-id');
-     const match = findMatchFromScheduleOrKO(matchId); // Finde Match in schedule oder knockoutMatches
-      const result = tournamentData.results[matchId] || { score1: null, score2: null, confirmed: false };
+    const matchId = event.target.getAttribute('data-match-id'); // Dies ist jetzt der UUID Primary Key aus der DB
+    const match = currentTournamentData.matches.find(m => m.id === matchId);
 
-     if (!match || result.confirmed) return;
-
-     const player1 = getParticipantById(match.player1);
-     const player2 = getParticipantById(match.player2);
-     // Phase 1 Check
-     if (!currentUser || (currentUser.id !== player1?.id && currentUser.id !== player2?.id)) {
-          alert("Nur beteiligte Spieler können Ergebnisse eintragen.");
-          return;
-     }
-      // Phase 2 Check (wird später aktiviert)
-     /*
-     if (!currentUserProfile || (currentUserProfile.id !== player1?.id && currentUserProfile.id !== player2?.id)) {
-          alert("Nur beteiligte Spieler können Ergebnisse eintragen.");
-          return;
-     }
-     */
-
-
-     // Zeitprüfung (nur für Gruppenphase relevant hier)
-     if (match.type === 'group' && match.time) {
-          const now = new Date();
-          const matchEndTime = new Date(match.time.getTime() + matchDuration * 60000); // Nur Dauer, keine Pause
-          if (now < matchEndTime) {
-              alert(`Das Spiel läuft noch oder hat nicht gestartet. Ergebnis kann erst ab ${matchEndTime.toLocaleTimeString()} eingetragen werden.`);
-              return;
-          }
-     }
-
-     // Modal vorbereiten und anzeigen
-      const player1NameEl = document.getElementById('player1-name');
-      const player2NameEl = document.getElementById('player2-name');
-      const matchTimeEl = document.getElementById('match-time');
-      const matchTableEl = document.getElementById('match-table');
-      const score1El = document.getElementById('score1');
-      const score2El = document.getElementById('score2');
-
-      if(player1NameEl) player1NameEl.textContent = player1?.username || 'N/A';
-      if(player2NameEl) player2NameEl.textContent = player2?.username || 'N/A';
-      if(matchTimeEl) matchTimeEl.textContent = match.time ? match.time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '--:--';
-      if(matchTableEl) matchTableEl.textContent = match.table || '?';
-      if(score1El) score1El.value = result.score1 !== null ? result.score1 : '';
-      if(score2El) score2El.value = result.score2 !== null ? result.score2 : '';
-
-      showMessage('result-modal-message', '', false); // Nachricht löschen
-      resultForm.dataset.currentMatchId = matchId; // Match-ID speichern für Submit
-
-      resultModal.classList.remove('hidden');
- }
-
-function handleResultSubmit(e) {
-     e.preventDefault();
-     const matchId = resultForm.dataset.currentMatchId;
-     const score1Input = document.getElementById('score1');
-     const score2Input = document.getElementById('score2');
-     const score1 = parseInt(score1Input.value, 10);
-     const score2 = parseInt(score2Input.value, 10);
-
-     if (isNaN(score1) || isNaN(score2) || score1 < 0 || score2 < 0) {
-          showMessage('result-modal-message', 'Bitte gültige, nicht-negative Punktzahlen eingeben.'); return;
-     }
-
-     const match = findMatchFromScheduleOrKO(matchId);
-     if (!match) {
-         showMessage('result-modal-message', 'Fehler: Match nicht gefunden.'); return;
-     }
-
-     // Validierung 1: Kein Unentschieden
-     if (score1 === score2) {
-         showMessage('result-modal-message', 'Unentschieden sind nicht erlaubt.'); return;
-     }
-
-     // Validierung 2: KO-Runden-Regel
-     if (match.type !== 'group') {
-          const winnerScore = Math.max(score1, score2);
-          const loserScore = Math.min(score1, score2);
-          if (winnerScore < 21) {
-              showMessage('result-modal-message', 'In KO-Runden muss der Gewinner mind. 21 Punkte haben.'); return;
-          }
-          if (winnerScore === 21 && loserScore > 19) {
-              showMessage('result-modal-message', 'Bei 21 Punkten muss der Vorsprung mind. 2 Punkte betragen (z.B. 21:19).'); return;
-          }
-          if (winnerScore > 21 && winnerScore - loserScore !== 2) {
-              showMessage('result-modal-message', 'Bei über 21 Punkten muss der Vorsprung genau 2 Punkte betragen (z.B. 22:20).'); return;
-          }
-     }
-
-    // Phase 1: Ergebnis direkt speichern (noch nicht bestätigt)
-    const currentUserId = currentUser?.id; // Phase 1 User ID
-     tournamentData.results[matchId] = {
-         score1: score1, score2: score2,
-         confirmed: false,
-         reportedBy: currentUserId // Phase 1: ID des aktuellen localStorage-Users
-     };
-     saveData();
-     showMessage('result-modal-message', 'Ergebnis gespeichert. Warte auf Bestätigung (simuliert).', true);
-
-      setTimeout(() => {
-          resultModal.classList.add('hidden');
-          displayTournamentPlan();
-          updateLeaderboard();
-          // Phase 1 Simulation der Gegner-Bestätigung
-          simulateOpponentConfirmation(matchId);
-      }, 1500);
-
-      // Phase 2: Würde hier Supabase Update Call machen
-      /*
-       const currentUserId = currentUserProfile?.id; // Phase 2 User ID
-       const { data, error } = await supabase.from('matches').update({
-           score1: score1, score2: score2, status: 'reported', reported_by_id: currentUserId
-       }).eq('id', matchId); // Annahme: 'id' ist PK
-       if (error) { showMessage('result-modal-message', `Fehler: ${error.message}`); }
-       else {
-           showMessage('result-modal-message', 'Ergebnis übermittelt. Warte auf Bestätigung.', true);
-           // Schließe Modal, update UI etc.
-           // Starte Echtzeit-Listener für Gegner
-       }
-      */
- }
-
- // Phase 1 Simulation der Bestätigung
- function simulateOpponentConfirmation(matchId) {
-     const match = findMatchFromScheduleOrKO(matchId);
-     const result = tournamentData.results[matchId];
-     if (!match || !result || result.confirmed || !match.player1 || !match.player2) return;
-
-     const reporter = getParticipantById(result.reportedBy);
-     // Finde den Gegner (Annahme: Der *andere* Spieler im Match)
-     const opponentId = (reporter?.id === match.player1) ? match.player2 : match.player1;
-     const opponent = getParticipantById(opponentId);
-     const player1 = getParticipantById(match.player1);
-     const player2 = getParticipantById(match.player2);
-
-     if (!reporter || !opponent || !player1 || !player2) {
-        console.warn("Konnte Bestätigung nicht simulieren, Spieler nicht gefunden.");
+    if (!match || match.status === 'confirmed') {
+        console.log("Match nicht gefunden oder bereits bestätigt.");
         return;
+    }
+
+    const player1 = getParticipantById(match.player1_id);
+    const player2 = getParticipantById(match.player2_id);
+
+    // Prüfe, ob der aktuelle User beteiligt ist
+    if (!currentUserProfile || (currentUserProfile.id !== match.player1_id && currentUserProfile.id !== match.player2_id)) {
+        alert("Nur beteiligte Spieler können Ergebnisse eintragen.");
+        return;
+    }
+
+    // Zeitprüfung (optional, wie vorher) ...
+
+    // Modal vorbereiten
+    // (DOM-Elemente holen wie zuvor)
+    document.getElementById('player1-name').textContent = player1?.username || 'N/A';
+    document.getElementById('player2-name').textContent = player2?.username || 'N/A';
+    document.getElementById('match-time').textContent = match.time ? match.time.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) : '--:--';
+    document.getElementById('match-table').textContent = match.table_number || '?';
+    document.getElementById('score1').value = match.score1 ?? ''; // Nutze DB-Werte, falls vorhanden
+    document.getElementById('score2').value = match.score2 ?? '';
+
+    showMessage('result-modal-message', '', false);
+    resultForm.dataset.currentMatchId = matchId; // UUID speichern
+
+    resultModal.classList.remove('hidden');
+}
+
+// Wird aufgerufen, wenn Ergebnis-Formular abgesendet wird
+async function handleResultSubmit(e) {
+    e.preventDefault();
+    const matchId = resultForm.dataset.currentMatchId;
+    const score1 = parseInt(document.getElementById('score1').value, 10);
+    const score2 = parseInt(document.getElementById('score2').value, 10);
+    const currentUserId = currentUserProfile?.id;
+
+    if (!currentUserId) {
+        showMessage('result-modal-message', 'Fehler: Nicht angemeldet.'); return;
+    }
+    if (!matchId) {
+        showMessage('result-modal-message', 'Fehler: Match-ID fehlt.'); return;
+    }
+
+    // Validierungen (wie vorher: kein Unentschieden, KO-Regeln) ...
+    const match = currentTournamentData.matches.find(m => m.id === matchId);
+     if (!match) { showMessage('result-modal-message', 'Fehler: Match nicht gefunden.'); return; }
+     if (score1 === score2) { showMessage('result-modal-message', 'Unentschieden sind nicht erlaubt.'); return; }
+     if (match.round_type !== 'group') { /* KO-Regel Prüfung */
+        const winnerScore = Math.max(score1, score2); const loserScore = Math.min(score1, score2);
+        if (winnerScore < 21 || (winnerScore === 21 && loserScore > 19) || (winnerScore > 21 && winnerScore - loserScore !== 2)) {
+            showMessage('result-modal-message', 'Ungültiges Ergebnis für KO-Runde (21 Punkte, 2 Vorsprung).'); return;
+        }
      }
 
 
-     // Zeige das Bestätigungs-Modal (als ob es der Gegner sehen würde)
-      const opponentReporterEl = document.getElementById('opponent-reporter');
-      const confirmP1NameEl = document.getElementById('confirm-player1-name');
-      const confirmP2NameEl = document.getElementById('confirm-player2-name');
-      const confirmS1El = document.getElementById('confirm-score1');
-      const confirmS2El = document.getElementById('confirm-score2');
+    showMessage('result-modal-message', 'Ergebnis wird übermittelt...', false);
 
+    // Update in Supabase DB
+    const { data, error } = await supabase
+        .from('matches')
+        .update({
+            score1: score1,
+            score2: score2,
+            status: 'reported', // Ergebnis gemeldet
+            reported_by_id: currentUserId
+        })
+        .eq('id', matchId)
+        .select() // Wichtig: .select() um das Ergebnis zurückzubekommen (optional)
+        .single(); // Annahme: Nur ein Match wird geupdated
 
-      if(opponentReporterEl) opponentReporterEl.textContent = reporter.username;
-      if(confirmP1NameEl) confirmP1NameEl.textContent = player1.username;
-      if(confirmP2NameEl) confirmP2NameEl.textContent = player2.username;
-      if(confirmS1El) confirmS1El.textContent = result.score1;
-      if(confirmS2El) confirmS2El.textContent = result.score2;
+    if (error) {
+        console.error("Error updating match result:", error);
+        showMessage('result-modal-message', `Fehler beim Speichern: ${error.message}`);
+    } else {
+        console.log("Match result reported:", data);
+        showMessage('result-modal-message', 'Ergebnis übermittelt. Warte auf Bestätigung.', true);
+        // Update lokaler Cache (optional, Realtime sollte das auch tun)
+        const matchIndex = currentTournamentData.matches.findIndex(m => m.id === matchId);
+        if (matchIndex !== -1) {
+             currentTournamentData.matches[matchIndex].score1 = score1;
+             currentTournamentData.matches[matchIndex].score2 = score2;
+             currentTournamentData.matches[matchIndex].status = 'reported';
+             currentTournamentData.matches[matchIndex].reported_by_id = currentUserId;
+             currentTournamentData.matches[matchIndex].result = { ...currentTournamentData.matches[matchIndex].result, score1, score2, reportedBy: currentUserId, confirmed: false };
+        }
+        // Schließe Modal und update UI
+        setTimeout(() => {
+            resultModal.classList.add('hidden');
+            displayTournamentPlan(); // UI mit '❓' aktualisieren
+            // Kein simulateOpponentConfirmation mehr nötig, Realtime übernimmt
+        }, 1500);
+    }
+}
 
-      showMessage('confirm-modal-message', '', false); // Nachricht löschen
-      confirmModal.dataset.currentMatchId = matchId; // Match-ID speichern
+// --- Echtzeit Listener & Bestätigungs-Logik ---
 
-     // In Phase 1 zeigen wir es einfach immer an
-      console.warn(`Simuliere Bestätigung für ${opponent.username} für Match ${matchId}`);
-      confirmModal.classList.remove('hidden');
- }
+// Wird aufgerufen, wenn eine Match-Änderung von Supabase kommt
+function handleRealtimeMatchUpdate(payload) {
+    console.log('Realtime: Match Update received:', payload);
+    const changedMatch = payload.new;
+    const oldMatchData = payload.old; // Kann nützlich sein zum Vergleichen
 
- function handleConfirmAccept() {
-      const matchId = confirmModal.dataset.currentMatchId;
-      if (!tournamentData.results[matchId]) return;
+    // 1. Update den lokalen Match-Cache
+    const matchIndex = currentTournamentData.matches.findIndex(m => m.id === changedMatch.id);
+    if (matchIndex !== -1) {
+        // Füge Zeit wieder als Date Objekt hinzu
+        const timeObj = changedMatch.scheduled_time ? new Date(changedMatch.scheduled_time) : null;
+        // Update das gesamte Match-Objekt im Cache
+        currentTournamentData.matches[matchIndex] = { ...changedMatch, time: timeObj };
+         // Aktualisiere das eingebettete result-Objekt
+         currentTournamentData.matches[matchIndex].result = {
+             score1: changedMatch.score1, score2: changedMatch.score2,
+             confirmed: changedMatch.status === 'confirmed',
+             reportedBy: changedMatch.reported_by_id,
+             winner: changedMatch.winner_id, loser: changedMatch.loser_id
+         };
 
-      // Phase 1: Direkt bestätigen
-      tournamentData.results[matchId].confirmed = true;
-      // Finde Gewinner/Verlierer für lokales results Objekt
-       const res = tournamentData.results[matchId];
-       const match = findMatchFromScheduleOrKO(matchId);
-       if(match) {
-           res.winner = res.score1 > res.score2 ? match.player1 : match.player2;
-           res.loser = res.score1 < res.score2 ? match.player1 : match.player2;
-       }
+    } else {
+        // Füge neues Match hinzu (sollte selten vorkommen bei UPDATE)
+        const timeObj = changedMatch.scheduled_time ? new Date(changedMatch.scheduled_time) : null;
+        currentTournamentData.matches.push({ ...changedMatch, time: timeObj });
+    }
 
-      saveData();
-      showMessage('confirm-modal-message', 'Ergebnis bestätigt!', true);
+    // 2. Prüfe, ob Bestätigungs-Modal für den aktuellen User angezeigt werden soll
+    if (changedMatch.status === 'reported' && currentUserProfile) {
+        const reporterId = changedMatch.reported_by_id;
+        const player1Id = changedMatch.player1_id;
+        const player2Id = changedMatch.player2_id;
+        const myId = currentUserProfile.id;
 
-      // Turnierlogik anstossen
-      const matchInfo = findMatchFromScheduleOrKO(matchId);
-      if (matchInfo?.type === 'group') {
-          calculateGroupStandings(matchInfo.groupId); // Gruppe neu berechnen
-      } else if (matchInfo) {
-          updateKnockoutMatch(matchId); // KO-Baum fortschreiben
-      }
+        // Bin ich der Gegner des Reporters?
+        if (reporterId !== myId && (player1Id === myId || player2Id === myId)) {
+            console.log(`Realtime: Confirmation needed for match ${changedMatch.id}`);
+            showConfirmModal(changedMatch); // Zeige das Modal mit den neuen Daten
+        }
+    }
 
-      setTimeout(() => {
-          confirmModal.classList.add('hidden');
-          displayTournamentPlan();
-          updateLeaderboard();
-      }, 1000);
-
-       // Phase 2: Würde Supabase Update Call machen, onAuthStateChange würde UI updaten
-       /*
-        const { error } = await supabase.from('matches').update({ status: 'confirmed' }).eq('id', matchId);
-         if(error) { showMessage('confirm-modal-message', `Fehler: ${error.message}`); }
-         else {
-             showMessage('confirm-modal-message', 'Bestätigt!', true);
-             // UI Update passiert durch Echtzeit-Listener oder manuelles Refetch
-             confirmModal.classList.add('hidden');
-             // updateKnockoutMatch(matchId); // Dieser Aufruf MUSS nach Bestätigung erfolgen!
+    // 3. Prüfe, ob ein Match bestätigt wurde -> Turnierlogik anstossen
+    if (changedMatch.status === 'confirmed') {
+         // Finde heraus, ob dieses Update das Match von 'reported' auf 'confirmed' geändert hat
+         // (Manchmal kommen Updates doppelt)
+         const previousStatus = oldMatchData?.status; // Benötigt `old` record in payload
+         if (previousStatus !== 'confirmed') {
+            console.log(`Realtime: Match ${changedMatch.id} confirmed. Updating tournament logic.`);
+            // Turnierlogik für bestätigtes Ergebnis anstossen
+             if (changedMatch.round_type === 'group') {
+                 // Neuberechnung der Gruppe verzögern oder hier machen
+                 calculateGroupStandings(changedMatch.group_id);
+             } else {
+                 // updateKnockoutMatch(changedMatch.id); // Funktion muss DB-Daten verwenden!
+                 // Besser: Signal senden, dass KO-Update nötig ist, oder direkt DB-basierte Logik aufrufen
+                 triggerKnockoutUpdate(changedMatch.id); // Eigene Funktion definieren
+             }
          }
-       */
-  }
+         // Schließe ggf. noch offenes Bestätigungs-Modal für dieses Match
+          if (confirmModal.dataset.currentMatchId === changedMatch.id && !confirmModal.classList.contains('hidden')) {
+              confirmModal.classList.add('hidden');
+          }
+    }
 
-  function handleConfirmReject() {
-       const matchId = confirmModal.dataset.currentMatchId;
-       if (!tournamentData.results[matchId]) return;
 
-       // Phase 1: Ergebnis löschen / zurücksetzen
-       delete tournamentData.results[matchId];
-       // Oder Status auf 'disputed' setzen
-       // tournamentData.results[matchId].status = 'disputed';
-       // tournamentData.results[matchId].confirmed = false;
+    // 4. UI neu rendern, um Änderungen anzuzeigen
+    // Debounce oder throttle dies, um bei vielen Updates nicht zu überlasten
+    requestAnimationFrame(() => {
+         displayTournamentPlan();
+         updateLeaderboard();
+    });
 
-       saveData();
-       showMessage('confirm-modal-message', 'Ergebnis abgelehnt (in Phase 1 zurückgesetzt).', false);
-       setTimeout(() => {
+}
+
+// Zeigt das Bestätigungs-Modal
+function showConfirmModal(matchData) {
+    const reporter = getParticipantById(matchData.reported_by_id);
+    const player1 = getParticipantById(matchData.player1_id);
+    const player2 = getParticipantById(matchData.player2_id);
+
+    if (!reporter || !player1 || !player2) {
+        console.error("Cannot show confirm modal, participant data missing.");
+        return;
+    }
+
+    // Fülle Modal-Felder
+    document.getElementById('opponent-reporter').textContent = reporter.username || 'N/A';
+    document.getElementById('confirm-player1-name').textContent = player1.username || 'N/A';
+    document.getElementById('confirm-player2-name').textContent = player2.username || 'N/A';
+    document.getElementById('confirm-score1').textContent = matchData.score1 ?? '?';
+    document.getElementById('confirm-score2').textContent = matchData.score2 ?? '?';
+
+    showMessage('confirm-modal-message', '', false);
+    confirmModal.dataset.currentMatchId = matchData.id; // Match UUID speichern
+
+    confirmModal.classList.remove('hidden');
+}
+
+// Handler für "Akzeptieren" im Bestätigungs-Modal
+async function handleConfirmAccept() {
+    const matchId = confirmModal.dataset.currentMatchId;
+    if (!matchId || !currentUserProfile) return;
+
+    showMessage('confirm-modal-message', 'Bestätigung wird gesendet...', false);
+
+    // Update Status in Supabase auf 'confirmed'
+    const { data, error } = await supabase
+        .from('matches')
+        .update({ status: 'confirmed' })
+        .eq('id', matchId)
+        .eq('status', 'reported'); // Nur updaten, wenn es noch 'reported' ist
+        // Optional: Prüfen, ob der aktuelle User der Gegner ist (via RLS Policy in Supabase empfohlen!)
+
+    if (error) {
+        console.error("Error confirming match:", error);
+        showMessage('confirm-modal-message', `Fehler: ${error.message}`);
+    } else {
+        console.log("Match confirmed via button:", matchId);
+        showMessage('confirm-modal-message', 'Ergebnis bestätigt!', true);
+        // Schließe Modal nach kurzer Verzögerung
+        setTimeout(() => {
             confirmModal.classList.add('hidden');
-            displayTournamentPlan();
-            updateLeaderboard();
-       }, 1500);
-
-        // Phase 2: Würde Status auf 'disputed' setzen, Admin müsste eingreifen
-        /*
-        const { error } = await supabase.from('matches').update({ status: 'disputed' }).eq('id', matchId);
-        if(error) { showMessage('confirm-modal-message', `Fehler: ${error.message}`); }
-        else {
-             showMessage('confirm-modal-message', 'Ergebnis abgelehnt. Admin wird benachrichtigt (simuliert).', false);
-              // UI Update, Modal schliessen
-        }
-        */
-  }
-
-// --- Turnier Logik ---
-// (Hier alle Turnierlogik-Funktionen einfügen: calculateGroupStandings, createGroups,
-// createGroupMatchesParallel, prepareKnockoutBrackets, seedKnockoutBracket, updateKnockoutMatch,
-// assignPlayerToMatch, allQuarterFinalsFinished, storeQuarterFinalLoser, assignFinalRank,
-// findParticipantGroupInfo, seed5th8thBracket, scheduleKoMatch, calculateKoStartTimeBase etc.)
-// --- Admin Button Handler ---
-function handleGenerateTournament() {
-    const verifiedParticipants = participants.filter(p=>p.verified);
-    if (verifiedParticipants.length < 2) {
-        alert("Es müssen mindestens 2 verifizierte Teilnehmer registriert sein."); return;
-    }
-    if (verifiedParticipants.length > 100) {
-        alert("Maximal 100 Teilnehmer erlaubt."); return;
-    }
-    if(confirm(`Sicher, dass der Turnierplan für ${verifiedParticipants.length} Teilnehmer jetzt generiert werden soll? Bestehende Daten werden überschrieben.`)) {
-         // Reset relevanter Daten
-         quarterFinalLosers = [];
-         finalRanks = {};
-         tableAvailableTimes = Array(12).fill(null);
-         lastKoMatchStartTime = null;
-         tournamentData = { groups: [], knockoutMatches: {}, schedule: [], results: {} }; // Reset
-
-         generateTournamentSchedule();
-         alert("Turnierplan wurde generiert.");
+            // UI Update geschieht durch Realtime Listener
+        }, 1000);
     }
 }
-function handleSeedKo() {
-     // Prüfen ob Gruppenphase abgeschlossen ist (alle Ergebnisse bestätigt)
-     const allGroupMatches = tournamentData.schedule.filter(m => m.type === 'group');
-     const allConfirmed = allGroupMatches.every(m => tournamentData.results[m.matchId]?.confirmed);
 
-     if (!allConfirmed) {
-         alert("Die Gruppenphase ist noch nicht abgeschlossen. Bitte erst alle Ergebnisse bestätigen.");
-         return;
-     }
+// Handler für "Ablehnen" im Bestätigungs-Modal
+async function handleConfirmReject() {
+    const matchId = confirmModal.dataset.currentMatchId;
+    if (!matchId || !currentUserProfile) return;
 
-    if(confirm("Sicher, dass die KO-Runde jetzt basierend auf den Gruppenergebnissen gesetzt werden soll?")) {
-        // Stelle sicher, dass alle Gruppenstände berechnet wurden
-        tournamentData.groups.forEach(g => calculateGroupStandings(g.id));
-        seedKnockoutBracket(); // Diese Funktion muss existieren und KO Matches erstellen/füllen
-        alert("KO-Runde wurde gesetzt und erste Spiele geplant.");
+    showMessage('confirm-modal-message', 'Ablehnung wird gesendet...', false);
+
+    // Update Status in Supabase auf 'disputed'
+    const { data, error } = await supabase
+        .from('matches')
+        .update({ status: 'disputed' }) // Status auf "umstritten"
+        .eq('id', matchId)
+        .eq('status', 'reported');
+        // Optional: RLS Policy Prüfung
+
+    if (error) {
+        console.error("Error rejecting match:", error);
+        showMessage('confirm-modal-message', `Fehler: ${error.message}`);
+    } else {
+        console.log("Match rejected:", matchId);
+        showMessage('confirm-modal-message', 'Ergebnis abgelehnt. Ein Admin muss dies prüfen.', false);
+         setTimeout(() => {
+            confirmModal.classList.add('hidden');
+             // UI Update geschieht durch Realtime Listener
+        }, 1500);
     }
 }
 
 
-// --- Turnier Logik Funktionen ---
-function calculateGroupStandings(groupId) {
-    const group = tournamentData.groups.find(g => g.id === groupId);
-    if (!group) return null;
+// --- Echtzeit-Subscriptions ---
 
-    const groupResults = {};
-    group.players.forEach(pId => {
-         groupResults[pId] = { points: 0, wins: 0, losses: 0, pointsFor: 0, pointsAgainst: 0, pointDiff: 0, gamesPlayed: 0 };
-    });
+// Startet Listener für relevante Matches
+function subscribeToRelevantMatches() {
+    if (!currentUserProfile) return; // Geht nur, wenn User eingeloggt ist
 
-    group.matches.forEach(matchId => {
-        const result = tournamentData.results[matchId];
-        const match = findMatchFromScheduleOrKO(matchId); // Nutze neue Suchfunktion
+    unsubscribeAllRealtime(); // Alte Listener entfernen
 
-        if (result && result.confirmed && match) {
-            const p1 = match.player1;
-            const p2 = match.player2;
-            const s1 = result.score1;
-            const s2 = result.score2;
+    console.log("Subscribing to realtime updates...");
 
-            // Addiere nur, wenn Spieler existiert
-            if(groupResults[p1]) {
-                groupResults[p1].gamesPlayed++;
-                groupResults[p1].pointsFor += s1;
-                groupResults[p1].pointsAgainst += s2;
-                groupResults[p1].pointDiff = groupResults[p1].pointsFor - groupResults[p1].pointsAgainst;
-            }
-             if(groupResults[p2]) {
-                groupResults[p2].gamesPlayed++;
-                groupResults[p2].pointsFor += s2;
-                groupResults[p2].pointsAgainst += s1;
-                groupResults[p2].pointDiff = groupResults[p2].pointsFor - groupResults[p2].pointsAgainst;
-             }
-
-
-            if (s1 > s2) {
-                if(groupResults[p1]) { groupResults[p1].points += 3; groupResults[p1].wins++; }
-                if(groupResults[p2]) { groupResults[p2].losses++; }
-            } else {
-                if(groupResults[p2]) { groupResults[p2].points += 3; groupResults[p2].wins++; }
-                if(groupResults[p1]) { groupResults[p1].losses++; }
-            }
-        }
-    });
-
-    let playerStandings = group.players.map(pId => ({
-        id: pId,
-        ...groupResults[pId] // Füge berechnete Werte hinzu
-    })).filter(p=> p.id); // Filtere evtl. ungültige Einträge
-
-
-    playerStandings.sort((a, b) => {
-         if (a.points !== b.points) return b.points - a.points; // 1. Punkte
-
-         const tiedPlayers = playerStandings.filter(p => p.points === a.points).map(p => p.id);
-
-         if (tiedPlayers.length === 2) { // 2a. Direkter Vergleich
-             const h2hMatch = findMatchBetweenPlayers(a.id, b.id, group.matches);
-             if (h2hMatch && h2hMatch.result?.confirmed) {
-                  return h2hMatch.result.winner === a.id ? -1 : 1; // Gewinner kommt zuerst
-             }
-         } else if (tiedPlayers.length > 2) { // 2b. Mini-Tabelle
-              const miniTablePointsA = calculateMiniTablePoints(a.id, tiedPlayers, group.matches);
-              const miniTablePointsB = calculateMiniTablePoints(b.id, tiedPlayers, group.matches);
-              if (miniTablePointsA !== miniTablePointsB) {
-                  return miniTablePointsB - miniTablePointsA;
-              }
-         }
-          // 3. Punktedifferenz
-         if (a.pointDiff !== b.pointDiff) return b.pointDiff - a.pointDiff;
-         // 4. Erzielte Punkte
-         if (a.pointsFor !== b.pointsFor) return b.pointsFor - a.pointsFor;
-         // 5. Los (simuliert durch ID)
-         return a.id.localeCompare(b.id);
-    });
-
-    // Ränge zuweisen
-    playerStandings.forEach((p, index) => {
-        p.rank = index + 1;
-         if (index > 0) { // Ranggleichheit prüfen
-             const prev = playerStandings[index-1];
-             if (p.points === prev.points && p.pointDiff === prev.pointDiff && p.pointsFor === prev.pointsFor /* && direkter Vergleich/Mini-Tabelle gleich */) {
-                 // Exakte Kriterien für Ranggleichheit hier prüfen
-                 // Vereinfacht: Wir weisen erstmal fortlaufende Ränge zu
-             }
-         }
-    });
-
-     // Speichere standings direkt in der Gruppe für einfachen Zugriff
-     group.standings = playerStandings;
-     // saveData(); // Speichern nach Berechnung - kann zu viel werden, besser gezielt speichern
-
-    return playerStandings;
-}
-
-function calculateMiniTablePoints(playerId, tiedPlayerIds, groupMatchIds) {
-     let points = 0;
-     groupMatchIds.forEach(matchId => {
-         const match = findMatchFromScheduleOrKO(matchId);
-         if (match && tiedPlayerIds.includes(match.player1) && tiedPlayerIds.includes(match.player2)) {
-             const result = tournamentData.results[matchId];
-             if (result && result.confirmed) {
-                 if (match.player1 === playerId && result.score1 > result.score2) points += 3;
-                 if (match.player2 === playerId && result.score2 > result.score1) points += 3;
-             }
-         }
-     });
-     return points;
-}
-
-function findMatchBetweenPlayers(p1Id, p2Id, matchIdList) {
-     for (const matchId of matchIdList) {
-        const match = findMatchFromScheduleOrKO(matchId);
-         if (match && ((match.player1 === p1Id && match.player2 === p2Id) || (match.player1 === p2Id && match.player2 === p1Id))) {
-             // Füge Ergebnis direkt hinzu, wenn verfügbar
-              match.result = tournamentData.results[matchId];
-              return match;
-         }
-     }
-     return null;
-}
-
-
- function generateTournamentSchedule() {
-     const verifiedParticipants = participants.filter(p => p.verified);
-     if (verifiedParticipants.length < 2) return;
-
-     tournamentData.groups = createGroups(verifiedParticipants, 6);
-     tournamentData.schedule = createGroupMatchesParallel(tournamentData.groups, startTime, matchDuration, breakDuration, 12);
-
-     const numQualifiers = tournamentData.groups.length * 2;
-     tournamentData.knockoutMatches = prepareKnockoutBrackets(numQualifiers);
-
-     // Ergebnisse initialisieren
-     tournamentData.results = {};
-     tournamentData.schedule.forEach(match => {
-         tournamentData.results[match.matchId] = { score1: null, score2: null, confirmed: false, reportedBy: null, winner: null, loser: null };
-     });
-      // KO-Matches haben ihr 'result' Objekt schon (in prepareKnockoutBrackets)
-      // Stelle sicher, dass sie auch im globalen results-Objekt sind
-      Object.values(tournamentData.knockoutMatches).flat().forEach(match => {
-          if (!tournamentData.results[match.matchId]) {
-               tournamentData.results[match.matchId] = match.result;
+    // Listener für ALLE Match-Updates (einfacher Ansatz)
+    // Besser: Filtern nach Matches, an denen der User beteiligt ist oder die offen sind
+    const allMatchesChannel = supabase.channel('public-matches')
+      .on('postgres_changes',
+          { event: '*', schema: 'public', table: 'matches' }, // Höre auf INSERT, UPDATE, DELETE
+          handleRealtimeMatchUpdate // Rufe zentrale Handler-Funktion auf
+      )
+      .subscribe((status, err) => {
+          if (status === 'SUBSCRIBED') {
+              console.log('Realtime channel "public-matches" connected!');
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+              console.error('Realtime channel error:', status, err);
+              // Ggf. Reconnect-Logik
+          } else {
+               console.log('Realtime channel status:', status);
           }
       });
 
-     console.log("Turnierplan generiert:", tournamentData);
-     saveData();
-     displayTournamentPlan();
- }
+    activeMatchListeners['all'] = allMatchesChannel; // Speichern zum Abmelden
 
- function createGroups(players, maxSize) {
-    const shuffledPlayers = [...players].sort(() => 0.5 - Math.random());
-    const groups = [];
-    let groupIndex = 0;
-    for (let i = 0; i < shuffledPlayers.length; i += maxSize) {
-        const groupPlayers = shuffledPlayers.slice(i, i + maxSize);
-        groups.push({
-            id: String.fromCharCode(65 + groupIndex++), // A, B, C...
-            players: groupPlayers.map(p => p.id),
-            matches: [],
-            standings: [] // Initial leere Standings
-        });
-    }
-    return groups;
+    // Zukünftig hier spezifischere Listener hinzufügen, z.B. nur für offene Bestätigungen
 }
 
- function createGroupMatchesParallel(groups, tournamentStartTime, gameTime, pauseTime, numTables) {
-     const schedule = [];
-     let matchCounter = 1;
-     const localTableAvailableTimes = Array(numTables).fill(new Date(tournamentStartTime.getTime()));
-     let groupMatchList = [];
+// Stoppt alle aktiven Realtime Listener
+function unsubscribeAllRealtime() {
+    console.log("Unsubscribing from all realtime channels...");
+    const channels = Object.values(activeMatchListeners);
+    if (channels.length > 0) {
+        supabase.removeChannel(...channels) // Entferne alle gespeicherten Channels
+            .then(() => console.log("Successfully unsubscribed from channels."))
+            .catch(err => console.error("Error unsubscribing:", err));
+    }
+    activeMatchListeners = {}; // Reset
+}
 
-     groups.forEach(group => {
-         const playerIds = group.players;
-         const groupMatches = [];
-         for (let i = 0; i < playerIds.length; i++) {
-             for (let j = i + 1; j < playerIds.length; j++) {
-                  const matchId = `G${group.id}-M${matchCounter++}`;
-                  groupMatches.push(matchId);
-                  groupMatchList.push({
-                      matchId: matchId, player1: playerIds[i], player2: playerIds[j],
-                      type: 'group', groupId: group.id
-                  });
-              }
-          }
-          group.matches = groupMatches;
-     });
 
-     groupMatchList.forEach(matchInfo => {
-         let earliestTableIndex = 0;
-         for (let i = 1; i < numTables; i++) {
-             if (localTableAvailableTimes[i] < localTableAvailableTimes[earliestTableIndex]) {
-                 earliestTableIndex = i;
+// --- Turnierlogik (muss Supabase-Daten verwenden!) ---
+
+// Beispiel: Gruppen generieren (schreibt in DB!)
+async function generateGroupsAndMatches() {
+    // 1. Hole alle Profile (Teilnehmer) aus der DB
+    const { data: profiles, error: profileError } = await supabase.from('profiles').select('id');
+    if (profileError || !profiles || profiles.length < 2) {
+         alert("Fehler beim Laden der Teilnehmer oder zu wenige Teilnehmer.");
+         return false;
+    }
+    const verifiedParticipants = profiles.map(p => ({ id: p.id })); // Brauchen nur die IDs
+
+    // 2. Erstelle Gruppen-Struktur (wie createGroups Funktion)
+    const groups = createGroups(verifiedParticipants, 6); // Gibt [{id: 'A', players: [id1, id2], ...}]
+
+    // 3. Erstelle Match-Einträge für die DB
+    const matchesToInsert = [];
+    const scheduleTime = new Date(startTime.getTime()); // Startzeit
+    let tableCounter = 0;
+
+    groups.forEach(group => {
+        const playerIds = group.players;
+        for (let i = 0; i < playerIds.length; i++) {
+            for (let j = i + 1; j < playerIds.length; j++) {
+                 matchesToInsert.push({
+                     // id: generiert DB automatisch (uuid)
+                     round_type: 'group',
+                     group_id: group.id,
+                     player1_id: playerIds[i],
+                     player2_id: playerIds[j],
+                     scheduled_time: new Date(scheduleTime.getTime()), // Zeit zuweisen
+                     table_number: (tableCounter % 12) + 1,
+                     status: 'scheduled'
+                 });
+                 // Zeit für nächstes Spiel an diesem Tisch erhöhen
+                 scheduleTime.setMinutes(scheduleTime.getMinutes() + matchDuration + breakDuration);
+                 tableCounter++; // Nächsten Tisch nehmen (vereinfachte Zuweisung)
              }
          }
-         const matchStartTime = new Date(localTableAvailableTimes[earliestTableIndex].getTime());
-         const matchEndTime = new Date(matchStartTime.getTime() + (gameTime + pauseTime) * 60000);
-         localTableAvailableTimes[earliestTableIndex] = matchEndTime;
+    });
 
-         schedule.push({
-             ...matchInfo,
-             time: matchStartTime,
-             table: earliestTableIndex + 1
-         });
-     });
+    // 4. Füge Matches in Supabase ein
+    console.log(`Inserting ${matchesToInsert.length} group matches...`);
+    const { data: insertedMatches, error: insertError } = await supabase
+        .from('matches')
+        .insert(matchesToInsert)
+        .select(); // Gib die eingefügten Matches zurück
 
-     schedule.sort((a, b) => a.time - b.time);
-     return schedule;
- }
-
- function prepareKnockoutBrackets(numberOfQualifiers) {
-     const knockoutMatches = { /* round16, quarter, semi, final, place3, place58_semi, place5, place7 */ };
-     let matchCounter = 1;
-
-     const createKoMatch = (typePrefix, winnerTo = null, loserTo = null) => ({
-         matchId: `KO-<span class="math-inline">\{typePrefix\}\-M</span>{matchCounter++}`,
-         player1: null, player2: null, type: typePrefix,
-         winnerTo: winnerTo, loserTo: loserTo,
-         time: null, table: null,
-         result: { score1: null, score2: null, confirmed: false, reportedBy: null, winner: null, loser: null }
-     });
-
-      // Erstelle Struktur basierend auf Qualifikantenanzahl (hier nur für 16 gezeigt)
-     if (numberOfQualifiers >= 16) {
-         knockoutMatches.round16 = Array.from({ length: 8 }, (_, i) => createKoMatch('ko16'));
-         knockoutMatches.quarter = Array.from({ length: 4 }, () => createKoMatch('koqf'));
-         knockoutMatches.semi = Array.from({ length: 2 }, () => createKoMatch('kosf'));
-         knockoutMatches.final = [createKoMatch('kof')];
-         knockoutMatches.place3 = [createKoMatch('ko3p')];
-         knockoutMatches.place58_semi = Array.from({ length: 2 }, () => createKoMatch('ko58sf'));
-         knockoutMatches.place5 = [createKoMatch('ko5p')];
-         knockoutMatches.place7 = [createKoMatch('ko7p')];
-
-         // Verknüpfungen setzen (Beispiele)
-         knockoutMatches.round16.forEach((m, i) => m.winnerTo = knockoutMatches.quarter[Math.floor(i/2)].matchId);
-         knockoutMatches.quarter.forEach((m, i) => {
-             m.winnerTo = knockoutMatches.semi[Math.floor(i/2)].matchId;
-             m.loserTo = knockoutMatches.place58_semi[Math.floor(i/2)].matchId;
-         });
-         knockoutMatches.semi.forEach((m, i) => {
-             m.winnerTo = knockoutMatches.final[0].matchId;
-             m.loserTo = knockoutMatches.place3[0].matchId;
-         });
-          knockoutMatches.place58_semi.forEach((m, i) => {
-              m.winnerTo = knockoutMatches.place5[0].matchId;
-              m.loserTo = knockoutMatches.place7[0].matchId;
-          });
-     }
-     // TODO: Logik für andere Anzahlen von Qualifikanten hinzufügen
-
-     return knockoutMatches;
- }
-
-function seedKnockoutBracket() {
-     console.log("Seeding KO bracket...");
-     const qualifiers = {};
-     let seedingPossible = true;
-
-     tournamentData.groups.forEach(group => {
-         if (!group.standings || group.standings.length < 2) {
-              console.warn(`Gruppe ${group.id} hat keine vollständigen Standings. Seeding unvollständig.`);
-              seedingPossible = false;
-         } else {
-            qualifiers[`${group.id}1`] = group.standings[0].id;
-            qualifiers[`${group.id}2`] = group.standings[1].id;
-         }
-     });
-
-     if (!seedingPossible) {
-         alert("Seeding nicht möglich, da nicht alle Gruppen abgeschlossen sind oder weniger als 2 Spieler haben.");
-         return;
-     }
-
-     const numGroups = tournamentData.groups.length;
-      // Annahme: Mindestens 8 Gruppen für das Standard-Schema
-     if (numGroups < 8 || !tournamentData.knockoutMatches.round16 || tournamentData.knockoutMatches.round16.length !== 8) {
-          alert("KO Seeding Schema für diese Gruppenanzahl nicht implementiert oder KO-Struktur passt nicht.");
-          console.error("KO Seeding Error: Gruppenanzahl oder KO-Struktur inkompatibel.");
-          return;
-     }
-
-     const pairings16 = [ /* Wie vorher definiert */
-         { p1Key: 'A1', p2Key: 'B2' }, { p1Key: 'C1', p2Key: 'D2' }, { p1Key: 'E1', p2Key: 'F2' }, { p1Key: 'G1', p2Key: 'H2' },
-         { p1Key: 'B1', p2Key: 'A2' }, { p1Key: 'D1', p2Key: 'C2' }, { p1Key: 'F1', p2Key: 'E2' }, { p1Key: 'H1', p2Key: 'G2' }
-     ];
-
-     let koMatchesScheduled = false;
-     pairings16.forEach((pair, index) => {
-         const match = tournamentData.knockoutMatches.round16[index];
-         match.player1 = qualifiers[pair.p1Key] || null;
-         match.player2 = qualifiers[pair.p2Key] || null;
-
-         if (match.player1 && match.player2 && !match.time) {
-              scheduleKoMatch(match); // Plane das Match, wenn beide Spieler bekannt sind
-              koMatchesScheduled = true;
-         } else if(!match.player1 || !match.player2) {
-             console.warn(`Match ${match.matchId} konnte nicht voll besetzt werden. Keys: ${pair.p1Key}, ${pair.p2Key}`);
-         }
-     });
-
-     saveData();
-     console.log("KO Round 16 seeded:", tournamentData.knockoutMatches.round16);
-     displayTournamentPlan(); // UI Update
-     if (koMatchesScheduled) {
-        console.log("Erste KO-Spiele wurden geplant.");
-     }
- }
-
-  function seed5th8thBracket() { /* Wie vorher definiert */
-     if (quarterFinalLosers.length !== 4) { return; }
-     quarterFinalLosers.sort((a, b) => {
-         if (a.score !== b.score) return b.score - a.score;
-         return b.groupPoints - a.groupPoints;
-     });
-     const semi1 = tournamentData.knockoutMatches.place58_semi[0];
-     const semi2 = tournamentData.knockoutMatches.place58_semi[1];
-     assignPlayerToMatch(semi1, quarterFinalLosers[0].playerId);
-     assignPlayerToMatch(semi1, quarterFinalLosers[3].playerId);
-     assignPlayerToMatch(semi2, quarterFinalLosers[1].playerId);
-     assignPlayerToMatch(semi2, quarterFinalLosers[2].playerId);
-     scheduleKoMatch(semi1);
-     scheduleKoMatch(semi2);
-     saveData();
-     displayTournamentPlan();
-  }
-
-
-  function updateKnockoutMatch(matchId) { /* Wie vorher definiert */
-     let completedMatch = findMatchFromScheduleOrKO(matchId); // Finde Match
-     if (!completedMatch || !completedMatch.result || !completedMatch.result.confirmed) { return; }
-     const { winnerId, loserId } = determineWinnerLoser(completedMatch); // Bestimme W/L
-     completedMatch.result.winner = winnerId; // Speichere W/L im Ergebnis
-     completedMatch.result.loser = loserId;
-     // Gewinner weiterschicken
-     if (completedMatch.winnerTo) {
-        const nextMatch = findKnockoutMatchById(completedMatch.winnerTo);
-        if (nextMatch) {
-            assignPlayerToMatch(nextMatch, winnerId);
-            if (nextMatch.player1 && nextMatch.player2 && !nextMatch.time) scheduleKoMatch(nextMatch);
-        }
-     } else { assignFinalRank(winnerId, completedMatch.type, true); }
-     // Verlierer behandeln
-     if (completedMatch.loserTo) {
-         const loserMatch = findKnockoutMatchById(completedMatch.loserTo);
-         if (loserMatch) {
-             if (completedMatch.type === 'koqf') { storeQuarterFinalLoser(loserId, completedMatch.result.score1 === Math.min(completedMatch.result.score1, completedMatch.result.score2) ? completedMatch.result.score1 : completedMatch.result.score2); }
-             else { assignPlayerToMatch(loserMatch, loserId); if (loserMatch.player1 && loserMatch.player2 && !loserMatch.time) scheduleKoMatch(loserMatch); }
-         }
-     } else { if (completedMatch.type !== 'ko16') assignFinalRank(loserId, completedMatch.type, false); }
-     // Check für 5-8 Seeding
-     if (completedMatch.type === 'koqf' && allQuarterFinalsFinished()) { seed5th8thBracket(); }
-     saveData();
-     displayTournamentPlan();
-     updateLeaderboard();
-   }
-
-
- // --- Hilfsfunktionen für KO-Logik ---
- function assignPlayerToMatch(match, playerId) { /* Wie vorher */
-    if (!match) return;
-    if (!match.player1) match.player1 = playerId;
-    else if (!match.player2) match.player2 = playerId;
-    else console.error(`Match ${match.matchId} already full.`);
- }
-  function allQuarterFinalsFinished() { /* Wie vorher */
-    if (!tournamentData.knockoutMatches?.quarter) return false;
-    return tournamentData.knockoutMatches.quarter.every(m => m.result?.confirmed);
-  }
- function storeQuarterFinalLoser(playerId, score) { /* Wie vorher */
-    if (!quarterFinalLosers.some(l => l.playerId === playerId)) {
-         const groupInfo = findParticipantGroupInfo(playerId);
-         quarterFinalLosers.push({ playerId, score, groupPoints: groupInfo?.points || 0 });
+    if (insertError) {
+        console.error("Error inserting group matches:", insertError);
+        alert(`Fehler beim Erstellen der Gruppenspiele: ${insertError.message}`);
+        return false;
     }
-  }
- function assignFinalRank(playerId, matchType, isWinner) { /* Wie vorher */
-     let rank = null;
-     switch (matchType) {
-         case 'kof': rank = isWinner ? 1 : 2; break; case 'ko3p': rank = isWinner ? 3 : 4; break;
-         case 'ko5p': rank = isWinner ? 5 : 6; break; case 'ko7p': rank = isWinner ? 7 : 8; break;
-     }
-     if (rank !== null && !finalRanks[playerId]) finalRanks[playerId] = rank;
-  }
- function findParticipantGroupInfo(playerId) { /* Wie vorher, mit Caching/Berechnung */
-      for (const group of tournamentData.groups) {
-         if (!group.standings && group.matches.every(mid => tournamentData.results[mid]?.confirmed)) { calculateGroupStandings(group.id); }
-         if (group.standings) { const standing = group.standings.find(s => s.id === playerId); if (standing) { standing.groupId = group.id; return standing; } }
-      } return null;
-  }
-  function determineWinnerLoser(match) { // Neue Hilfsfunktion
-       if (!match?.result?.confirmed) return { winnerId: null, loserId: null };
-       const { score1, score2, player1, player2 } = match; // Annahme: player1/2 IDs sind im Match Objekt
-       const result = match.result;
-       const winnerId = result.score1 > result.score2 ? player1 : player2;
-       const loserId = result.score1 < result.score2 ? player1 : player2;
-       return { winnerId, loserId };
-  }
-  // Funktion um Match in schedule ODER knockoutMatches zu finden
-  function findMatchFromScheduleOrKO(matchId) {
-       let match = tournamentData.schedule.find(m => m.matchId === matchId);
-       if (match) return match;
-       for (const roundKey in tournamentData.knockoutMatches) {
-            const round = tournamentData.knockoutMatches[roundKey];
-            if (Array.isArray(round)) {
-                match = round.find(m => m.matchId === matchId);
-                if (match) return match;
-            }
-       }
-       return null;
-  }
 
-
-// --- Zeitplanungs-Funktionen ---
-// (Hier scheduleKoMatch und calculateKoStartTimeBase einfügen)
-function scheduleKoMatch(match) {
-    if (!match || !match.player1 || !match.player2 || match.time) { return; }
-    let earliestPossibleStart = calculateKoStartTimeBase();
-    if (lastKoMatchStartTime && earliestPossibleStart < lastKoMatchStartTime) {
-        earliestPossibleStart = new Date(lastKoMatchStartTime.getTime());
-    }
-    if (tableAvailableTimes.every(t => t === null)) {
-        tableAvailableTimes.fill(earliestPossibleStart);
-    }
-    let bestTableIndex = 0;
-    for (let i = 1; i < tableAvailableTimes.length; i++) {
-        if (tableAvailableTimes[i] < tableAvailableTimes[bestTableIndex]) {
-            bestTableIndex = i;
-        }
-    }
-    const assignedTime = new Date(Math.max(earliestPossibleStart.getTime(), tableAvailableTimes[bestTableIndex].getTime()));
-    match.time = assignedTime;
-    match.table = bestTableIndex + 1;
-    const finishTime = new Date(assignedTime.getTime() + (KO_MATCH_DURATION_MIN + KO_BREAK_DURATION_MIN) * 60000);
-    tableAvailableTimes[bestTableIndex] = finishTime;
-    lastKoMatchStartTime = new Date(assignedTime.getTime());
-    console.log(`SCHEDULED: Match ${match.matchId} at <span class="math-inline">\{match\.time\.toLocaleTimeString\(\)\} on T</span>{match.table}`);
-    // saveData(); // Besser gezielt speichern
+    console.log("Group matches inserted:", insertedMatches);
+     // 5. Lade Daten neu, um die Änderungen zu sehen
+     await loadInitialTournamentData();
+     return true; // Erfolg
 }
 
-function calculateKoStartTimeBase() {
-    let lastGroupFinishTime = new Date(startTime.getTime());
-    tournamentData.schedule.forEach(match => {
-        if (match.type === 'group' && match.time) {
-            const groupMatchEndTime = new Date(match.time.getTime() + (matchDuration + breakDuration) * 60000);
-            if (groupMatchEndTime > lastGroupFinishTime) lastGroupFinishTime = groupMatchEndTime;
+// Beispiel: KO-Runde Seeden (liest aus DB, schreibt in DB)
+async function seedKnockoutBracketFromDB() {
+    console.log("Seeding KO bracket from DB data...");
+
+    // 1. Berechne Gruppen-Standings (liest Match-Daten aus Cache/DB)
+     const groupStandings = {};
+     const groupIds = Object.keys(currentTournamentData.groups);
+     for(const groupId of groupIds) {
+         groupStandings[groupId] = calculateGroupStandings(groupId); // Nutzt Cache/DB-Daten
+         if (!groupStandings[groupId] || groupStandings[groupId].length < 2) {
+              alert(`Fehler: Gruppe ${groupId} nicht abgeschlossen oder zu wenige Spieler.`);
+              return false; // Abbruch
+         }
+     }
+
+    // 2. Extrahiere Qualifikanten
+     const qualifiers = {};
+     groupIds.forEach(gid => {
+          qualifiers[`${gid}1`] = groupStandings[gid][0].id;
+          qualifiers[`${gid}2`] = groupStandings[gid][1].id;
+     });
+
+    // 3. Erstelle KO Match-Objekte für die DB (Struktur wie prepareKnockoutBrackets)
+     // Annahme: prepareKnockoutBrackets erstellt nur die Struktur, nicht die DB-Einträge
+     const koStructure = prepareKnockoutBrackets(groupIds.length * 2); // Erzeugt leere Struktur mit Verknüpfungen
+     const koMatchesToInsert = [];
+     const koMatchMap = {}; // Zum Speichern der neu generierten UUIDs für Verknüpfungen
+
+     // Zuerst alle Matches ohne winner/loserTo erstellen
+     Object.keys(koStructure).forEach(roundKey => {
+         koStructure[roundKey].forEach(matchTemplate => {
+             const newMatch = {
+                 // id: wird von DB generiert
+                 round_type: matchTemplate.type,
+                 status: 'scheduled', // Noch nicht gespielt
+                 // player1_id, player2_id initial null
+             };
+             koMatchesToInsert.push(newMatch);
+             // Merke dir das Template für spätere Verknüpfung anhand einer temporären ID
+             koMatchMap[matchTemplate.matchId] = newMatch; // matchId ist hier die temporäre ID aus prepareKnockoutBrackets
+         });
+     });
+
+    // Füge die KO-Matches in die DB ein
+    const { data: insertedKoMatches, error: insertKoError } = await supabase
+        .from('matches')
+        .insert(koMatchesToInsert)
+        .select(); // Wichtig: Hole die generierten IDs zurück!
+
+     if (insertKoError || !insertedKoMatches) {
+          console.error("Error inserting KO matches:", insertKoError);
+          alert("Fehler beim Erstellen der KO-Spiele.");
+          return false;
+     }
+     console.log("KO Match structure inserted:", insertedKoMatches);
+
+    // Ordne die zurückgegebenen Matches (mit IDs) den temporären IDs zu
+     insertedKoMatches.forEach((dbMatch, index) => {
+         const originalMatch = koMatchMap[koMatchesToInsert[index].matchId]; // Finde das ursprüngliche Template
+         originalMatch.dbId = dbMatch.id; // Speichere die echte DB-ID
+         originalMatch.dbData = dbMatch; // Speichere alle DB-Daten
+     });
+
+
+     // Jetzt die Verknüpfungen (winnerTo, loserTo) und Spieler in der DB aktualisieren
+     const updates = [];
+      Object.keys(koStructure).forEach(roundKey => {
+          koStructure[roundKey].forEach(matchTemplate => {
+               const dbId = matchTemplate.dbId;
+               if (!dbId) return; // Sollte nicht passieren
+
+               const updatePayload = {};
+               // Finde die DB-IDs der Folge-Matches
+               if (matchTemplate.winnerTo && koMatchMap[matchTemplate.winnerTo]?.dbId) {
+                    updatePayload.winner_to_match_id = koMatchMap[matchTemplate.winnerTo].dbId;
+               }
+               if (matchTemplate.loserTo && koMatchMap[matchTemplate.loserTo]?.dbId) {
+                    updatePayload.loser_to_match_id = koMatchMap[matchTemplate.loserTo].dbId;
+               }
+                // Füge Spieler für die erste Runde (round16) hinzu
+               if (roundKey === 'round16') {
+                    // Finde Paarung basierend auf matchTemplate oder Index
+                     const pairing = findPairingForMatch(matchTemplate); // Hilfsfunktion nötig
+                     if (pairing) {
+                          updatePayload.player1_id = qualifiers[pairing.p1Key] || null;
+                          updatePayload.player2_id = qualifiers[pairing.p2Key] || null;
+                     }
+               }
+
+               if (Object.keys(updatePayload).length > 0) {
+                    updates.push(supabase.from('matches').update(updatePayload).eq('id', dbId));
+               }
+          });
+      });
+
+      // Führe alle Updates aus
+      const results = await Promise.all(updates);
+      const errors = results.filter(res => res.error);
+      if (errors.length > 0) {
+           console.error("Error updating KO match links/players:", errors);
+           alert("Fehler beim Verknüpfen der KO-Spiele.");
+           return false;
+      }
+
+      console.log("KO Bracket seeded and linked in DB.");
+       // Daten neu laden und erste Spiele planen
+       await loadInitialTournamentData();
+       // scheduleInitialKoMatches(); // Funktion, die die ersten KO-Spiele plant
+       return true;
+}
+
+
+// --- Turnierlogik (Beispiele angepasst) ---
+
+// Muss jetzt asynchron sein und DB-Daten verwenden
+async function triggerKnockoutUpdate(confirmedMatchId) {
+    console.log(`Triggering KO update based on match ${confirmedMatchId}`);
+    // 1. Lade das bestätigte Match und das nächste Match für Gewinner/Verlierer
+    const { data: completedMatchData, error: fetchError } = await supabase
+        .from('matches')
+        .select('*, player1:player1_id(*), player2:player2_id(*), winner:winner_id(*), loser:loser_id(*)') // Hole verknüpfte Profile
+        .eq('id', confirmedMatchId)
+        .single();
+
+    if (fetchError || !completedMatchData) {
+        console.error(`Error fetching confirmed match ${confirmedMatchId}:`, fetchError);
+        return;
+    }
+
+     // Stelle sicher, dass Spieler-IDs vorhanden sind
+     completedMatchData.player1_id = completedMatchData.player1?.id || completedMatchData.player1_id;
+     completedMatchData.player2_id = completedMatchData.player2?.id || completedMatchData.player2_id;
+
+
+    // 2. Bestimme Gewinner/Verlierer (sollte schon in DB stehen, aber zur Sicherheit)
+    const winnerId = completedMatchData.winner_id;
+    const loserId = completedMatchData.loser_id;
+
+    if (!winnerId || !loserId) {
+        console.error(`Winner/Loser missing for confirmed match ${confirmedMatchId}`);
+        // Evtl. hier berechnen und DB updaten?
+        return;
+    }
+
+    const updates = []; // Sammle DB Update Promises
+
+    // 3. Gewinner weiterschicken
+    if (completedMatchData.winner_to_match_id) {
+        const nextMatchId = completedMatchData.winner_to_match_id;
+        // Finde heraus, ob player1 oder player2 gesetzt werden muss
+        const { data: nextMatch, error: nextFetchError } = await supabase
+            .from('matches').select('player1_id, player2_id').eq('id', nextMatchId).single();
+
+        if (nextFetchError || !nextMatch) { console.error(`Next match ${nextMatchId} not found!`); }
+        else {
+            let payload = {};
+            if (!nextMatch.player1_id) payload.player1_id = winnerId;
+            else if (!nextMatch.player2_id) payload.player2_id = winnerId;
+
+            if (Object.keys(payload).length > 0) {
+                console.log(`Updating next match ${nextMatchId} for winner ${winnerId}`);
+                updates.push(supabase.from('matches').update(payload).eq('id', nextMatchId));
+                 // Wenn das nächste Match jetzt voll ist, planen? -> Eigene Funktion scheduleIfReady(nextMatchId)
+            }
+        }
+    } else { /* Finalspiel gewonnen -> Rang setzen */ }
+
+    // 4. Verlierer behandeln
+    if (completedMatchData.loser_to_match_id) {
+        const loserMatchId = completedMatchData.loser_to_match_id;
+         // Spezialfall QF-Verlierer
+         if (completedMatchData.round_type === 'koqf') {
+             // storeQuarterFinalLoserInDB(loserId, loserScore); // Funktion, die in DB speichert oder markiert
+         } else {
+             // Finde heraus, ob player1 oder player2 gesetzt werden muss
+             const { data: loserMatch, error: loserFetchError } = await supabase
+                 .from('matches').select('player1_id, player2_id').eq('id', loserMatchId).single();
+
+             if (loserFetchError || !loserMatch) { console.error(`Loser match ${loserMatchId} not found!`); }
+             else {
+                 let payload = {};
+                 if (!loserMatch.player1_id) payload.player1_id = loserId;
+                 else if (!loserMatch.player2_id) payload.player2_id = loserId;
+
+                 if (Object.keys(payload).length > 0) {
+                     console.log(`Updating loser match ${loserMatchId} for loser ${loserId}`);
+                     updates.push(supabase.from('matches').update(payload).eq('id', loserMatchId));
+                      // Wenn das Verlierer-Match jetzt voll ist, planen? -> scheduleIfReady(loserMatchId)
+                 }
+             }
+         }
+    } else { /* Ausgeschieden oder Rang setzen */ }
+
+    // Führe alle Updates aus
+    const results = await Promise.all(updates);
+    const updateErrors = results.filter(res => res.error);
+    if (updateErrors.length > 0) {
+        console.error("Error updating subsequent matches:", updateErrors);
+    } else {
+        console.log("Successfully updated subsequent matches.");
+         // Daten neu laden, um Änderungen in der UI zu sehen
+         // await loadInitialTournamentData(); // Könnte durch Realtime ersetzt werden
+    }
+
+    // Ggf. 5-8 Seeding anstossen, falls QF abgeschlossen
+     if (completedMatchData.round_type === 'koqf') {
+        // Prüfe ob alle QF fertig sind (via DB Abfrage)
+        // await seed5th8thBracketFromDB(); // Funktion anpassen
+     }
+}
+
+
+// --- Admin Button Handler (Phase 2) ---
+async function handleGenerateTournament() {
+    // Bestätigungsdialog
+    if (!confirm("Sicher, dass alle bestehenden Matches gelöscht und neue Gruppenspiele generiert werden sollen? Dies kann nicht rückgängig gemacht werden!")) return;
+
+    // 1. (Optional aber empfohlen) Alle alten Matches löschen
+    console.log("Deleting existing matches...");
+    const { error: deleteError } = await supabase.from('matches').delete().neq('id', '0'); // Lösche alle
+    if (deleteError) {
+        alert(`Fehler beim Löschen alter Matches: ${deleteError.message}`);
+        return;
+    }
+    console.log("Old matches deleted.");
+    currentTournamentData = { matches: [], participants: currentTournamentData.participants, groups: {}, knockoutMatches: {} }; // Lokalen Cache leeren
+
+
+    // 2. Gruppen und Matches generieren und in DB schreiben
+    alert("Generiere Gruppenspiele... Dies kann einen Moment dauern.");
+    const success = await generateGroupsAndMatches(); // Diese Funktion schreibt in die DB
+
+    if (success) {
+        alert("Gruppenspiele erfolgreich generiert und gespeichert!");
+    } else {
+        alert("Fehler beim Generieren der Gruppenspiele.");
+    }
+}
+
+async function handleSeedKo() {
+     // 1. Prüfen, ob alle Gruppenspiele 'confirmed' sind (DB Abfrage)
+     const { data: groupMatches, error: fetchGroupError } = await supabase
+         .from('matches')
+         .select('status')
+         .eq('round_type', 'group');
+
+     if (fetchGroupError) { alert(`Fehler beim Prüfen der Gruppenspiele: ${fetchGroupError.message}`); return; }
+
+     const allConfirmed = groupMatches.every(m => m.status === 'confirmed');
+     if (!allConfirmed) { alert("Die Gruppenphase ist noch nicht abgeschlossen!"); return; }
+
+     // 2. Bestätigungsdialog
+     if (!confirm("Sicher, dass die KO-Runde jetzt basierend auf den Gruppenergebnissen gesetzt werden soll?")) return;
+
+     // 3. KO-Bracket Seeding (Funktion muss DB schreiben)
+     alert("Setze KO-Runde... Dies kann einen Moment dauern.");
+     const success = await seedKnockoutBracketFromDB(); // Diese Funktion schreibt in die DB
+
+     if (success) {
+         alert("KO-Runde erfolgreich gesetzt!");
+     } else {
+         alert("Fehler beim Setzen der KO-Runde.");
+     }
+}
+
+
+// --- Event Listener Setup ---
+function addEventListeners() {
+    // Auth Buttons
+    showRegisterBtn?.addEventListener('click', () => showAuthForm(registerForm));
+    showLoginBtn?.addEventListener('click', () => showAuthForm(loginForm));
+    // Logout Button hinzufügen im HTML und hier Listener hinzufügen:
+    // document.getElementById('logout-btn')?.addEventListener('click', handleLogout);
+
+    // Forms
+    registerForm?.addEventListener('submit', handleRegister);
+    loginForm?.addEventListener('submit', handleLogin);
+    // Kein Verify Button mehr
+
+    // Navigation
+    participateBtn?.addEventListener('click', () => displayTournamentPlan());
+    document.querySelector('#main-screen header h1')?.addEventListener('click', () => displayTournamentOverview());
+
+    // Filter
+    nameFilterInput?.addEventListener('input', () => {
+        // Kein Speichern in localStorage mehr nötig
+        displayTournamentPlan(); // Filterung geschieht clientseitig beim Rendern
+    });
+
+    // Modals
+    closeResultModalBtn?.addEventListener('click', () => resultModal.classList.add('hidden'));
+    closeConfirmModalBtn?.addEventListener('click', () => confirmModal.classList.add('hidden'));
+    resultForm?.addEventListener('submit', handleResultSubmit);
+    confirmAcceptBtn?.addEventListener('click', handleConfirmAccept);
+    confirmRejectBtn?.addEventListener('click', handleConfirmReject);
+
+    // Admin Buttons
+    document.getElementById('generate-tournament-btn')?.addEventListener('click', handleGenerateTournament);
+    document.getElementById('seed-ko-btn')?.addEventListener('click', handleSeedKo);
+
+    // Dynamische Listener für Ergebnis-Buttons (wird in display... aufgerufen)
+}
+
+function addResultButtonListeners() {
+    document.querySelectorAll('.result-btn').forEach(button => {
+        // Ersetze Button, um alte Listener sicher zu entfernen
+        const newButton = button.cloneNode(true);
+        button.parentNode.replaceChild(newButton, button);
+        // Füge Listener zum neuen Button hinzu, wenn nicht disabled
+        if (!newButton.disabled) {
+            newButton.addEventListener('click', handleResultButtonClick);
         }
     });
-    const koStartTimeBase = new Date(lastGroupFinishTime.getTime() + BUFFER_AFTER_GROUP_MIN * 60000);
-    const minutes = koStartTimeBase.getMinutes();
-    const roundedMinutes = Math.ceil(minutes / 5) * 5;
-    koStartTimeBase.setMinutes(roundedMinutes, 0, 0);
-    return koStartTimeBase;
 }
 
 
-// --- Hilfsfunktionen für Event Listener ---
-// Füge hier die Handler ein, die oben referenziert wurden (handleRegister, handleLogin, handleVerify, etc.)
-// ... und alle weiteren Hilfsfunktionen ...
-
-
-// --- Initialen Aufruf ---
-// Wird jetzt von DOMContentLoaded am Anfang aufgerufen.
-
-```
+// --- Initialer Start ---
+document.addEventListener('DOMContentLoaded', () => {
+    addEventListeners(); // Füge Listener hinzu
+    // onAuthStateChange kümmert sich um das Laden der Daten und die initiale UI
+});
