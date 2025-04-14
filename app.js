@@ -2,7 +2,8 @@
 const SUPABASE_URL = 'https://tleekgcafugywbhfwpky.supabase.co'; // Deine URL
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRsZWVrZ2NhZnVneXdiaGZ3cGt5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDQ2MzEzNTcsImV4cCI6MjA2MDIwNzM1N30.UgWOr-rGY17YL11gghJmEg_HUkMscnEf-pPe0gY4Jwk'; // Dein Key
 
-const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Initialisiere den Supabase Client mit einem *anderen* Variablennamen
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 // --- Globale Zustandsvariablen ---
 let currentSession = null; // Hält die Supabase Auth Session
@@ -57,7 +58,7 @@ const confirmRejectBtn = document.getElementById('confirm-result-reject-btn');
 // --- Kernfunktionen (Auth, Daten laden, UI) ---
 
 // Wird bei Login/Logout aufgerufen
-supabase.auth.onAuthStateChange(async (_event, session) => {
+supabaseClient.auth.onAuthStateChange(async (_event, session) => {
     if (session && currentSession?.user?.id !== session.user.id) { // Nur bei echtem Wechsel oder erstem Laden
         console.log('Auth State Changed: User logged in', session.user.id);
         currentSession = session;
@@ -270,7 +271,7 @@ async function handleRegister(e) {
 
     showMessage('register-message', 'Registrierung wird verarbeitet...', false);
 
-    const { data, error } = await supabase.auth.signUp({
+    const { data, error } = await supabaseClient.auth.signUp({
         email: email,
         password: password,
         options: {
@@ -314,7 +315,7 @@ async function handleLogin(e) {
     showMessage('login-message', 'Anmeldung wird geprüft...', false);
 
     // Versuche Login mit E-Mail
-    const { data, error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabaseClient.auth.signInWithPassword({
         email: loginIdentifier,
         password: password,
     });
@@ -336,7 +337,7 @@ async function handleLogin(e) {
 async function handleLogout() {
     console.log("Logging out...");
     unsubscribeAllRealtime(); // Wichtig: Listener abmelden
-    const { error } = await supabase.auth.signOut();
+    const { error } = await supabaseClient.auth.signOut();
     if (error) {
         console.error("Logout Error:", error);
         alert(`Logout fehlgeschlagen: ${error.message}`);
@@ -872,7 +873,7 @@ function subscribeToRelevantMatches() {
 
     // Listener für ALLE Match-Updates (einfacher Ansatz)
     // Besser: Filtern nach Matches, an denen der User beteiligt ist oder die offen sind
-    const allMatchesChannel = supabase.channel('public-matches')
+    const allMatchesChannel = supabaseClient.channel('public-matches')
       .on('postgres_changes',
           { event: '*', schema: 'public', table: 'matches' }, // Höre auf INSERT, UPDATE, DELETE
           handleRealtimeMatchUpdate // Rufe zentrale Handler-Funktion auf
@@ -898,7 +899,7 @@ function unsubscribeAllRealtime() {
     console.log("Unsubscribing from all realtime channels...");
     const channels = Object.values(activeMatchListeners);
     if (channels.length > 0) {
-        supabase.removeChannel(...channels) // Entferne alle gespeicherten Channels
+        supabaseClient.removeChannel(...channels) // Entferne alle gespeicherten Channels
             .then(() => console.log("Successfully unsubscribed from channels."))
             .catch(err => console.error("Error unsubscribing:", err));
     }
@@ -911,7 +912,7 @@ function unsubscribeAllRealtime() {
 // Beispiel: Gruppen generieren (schreibt in DB!)
 async function generateGroupsAndMatches() {
     // 1. Hole alle Profile (Teilnehmer) aus der DB
-    const { data: profiles, error: profileError } = await supabase.from('profiles').select('id');
+    const { data: profiles, error: profileError } = await supabaseClient.from('profiles').select('id');
     if (profileError || !profiles || profiles.length < 2) {
          alert("Fehler beim Laden der Teilnehmer oder zu wenige Teilnehmer.");
          return false;
@@ -1056,7 +1057,7 @@ async function seedKnockoutBracketFromDB() {
                }
 
                if (Object.keys(updatePayload).length > 0) {
-                    updates.push(supabase.from('matches').update(updatePayload).eq('id', dbId));
+                    updates.push(supabaseClient.from('matches').update(updatePayload).eq('id', dbId));
                }
           });
       });
@@ -1127,7 +1128,7 @@ async function triggerKnockoutUpdate(confirmedMatchId) {
 
             if (Object.keys(payload).length > 0) {
                 console.log(`Updating next match ${nextMatchId} for winner ${winnerId}`);
-                updates.push(supabase.from('matches').update(payload).eq('id', nextMatchId));
+                updates.push(supabaseClient.from('matches').update(payload).eq('id', nextMatchId));
                  // Wenn das nächste Match jetzt voll ist, planen? -> Eigene Funktion scheduleIfReady(nextMatchId)
             }
         }
@@ -1152,7 +1153,7 @@ async function triggerKnockoutUpdate(confirmedMatchId) {
 
                  if (Object.keys(payload).length > 0) {
                      console.log(`Updating loser match ${loserMatchId} for loser ${loserId}`);
-                     updates.push(supabase.from('matches').update(payload).eq('id', loserMatchId));
+                     updates.push(supabaseClient.from('matches').update(payload).eq('id', loserMatchId));
                       // Wenn das Verlierer-Match jetzt voll ist, planen? -> scheduleIfReady(loserMatchId)
                  }
              }
@@ -1185,7 +1186,7 @@ async function handleGenerateTournament() {
 
     // 1. (Optional aber empfohlen) Alle alten Matches löschen
     console.log("Deleting existing matches...");
-    const { error: deleteError } = await supabase.from('matches').delete().neq('id', '0'); // Lösche alle
+    const { error: deleteError } = await supabaseClient.from('matches').delete().neq('id', '0'); // Lösche alle
     if (deleteError) {
         alert(`Fehler beim Löschen alter Matches: ${deleteError.message}`);
         return;
