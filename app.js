@@ -290,15 +290,18 @@ async function handleRegister(e) {
     });
 
     if (error) {
+        // Fehlerbehandlung bleibt gleich
         console.error("Signup Error:", error);
-        showMessage('register-message', `Registrierungsfehler: ${error.message}`);
+        showUserMessage(`Registrierungsfehler: ${error.message}`, 'error', 0); // Nutze showUserMessage
     } else {
+        // Erfolgsfall - Nachricht verbessert
         console.log("Signup successful:", data);
-        // Wenn E-Mail Bestätigung in Supabase AKTIVIERT ist:
-        if (data.user?.identities?.length === 0) { // Oder prüfe spezifische Property
-             showMessage('register-message', 'Registrierung fast abgeschlossen! Bitte prüfe dein E-Mail Postfach und klicke auf den Bestätigungslink.', true);
-             showAuthForm(loginForm); // Zeige Login Form nach erfolgreicher Registrierung
-        } else {
+        // Klare Nachricht, da wir wissen, dass Bestätigung AN ist
+        showUserMessage('Registrierung fast abgeschlossen! Bitte prüfe dein E-Mail Postfach (' + email + ') und klicke auf den Bestätigungslink, um den Vorgang abzuschliessen.', 'success', 10000); // Längere Anzeige
+
+        registerForm.reset(); // Formular leeren
+        showAuthForm(loginForm); // Zum Login wechseln
+    } else {
         // Wenn E-Mail Bestätigung DEAKTIVIERT ist:
              showMessage('register-message', 'Registrierung erfolgreich! Du kannst dich jetzt anmelden.', true);
              showAuthForm(loginForm); // Zeige Login Form
