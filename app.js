@@ -84,21 +84,27 @@ supabaseClient.auth.onAuthStateChange(async (_event, session) => {
 // Lädt das Benutzerprofil aus der 'profiles' Tabelle
 async function loadUserProfile(userId) {
     console.log(`Attempting to load profile for user ID: ${userId}`);
-    const { data, error } = await supabase
-        .from('profiles') // Annahme: Tabelle heisst 'profiles'
-        .select('*')
-        .eq('id', userId) // Annahme: 'id' Spalte in profiles entspricht auth.users.id
-        .single();
+    try { // Füge try...catch hinzu für bessere Fehlerbehandlung
+        const { data, error, status } = await supabaseClient // <--- KORRIGIERT!
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single();
 
-    if (error) {
-        console.error('Error loading user profile:', error);
-        // Möglicherweise ist das Profil noch nicht erstellt worden (nach signUp)
-        // Hier könnte Logik stehen, um das Profil anzulegen, falls nicht vorhanden.
-        currentUserProfile = null;
-    } else {
-        currentUserProfile = data;
-        console.log('User profile loaded:', currentUserProfile);
-        // Ggf. Benutzername im Header anzeigen etc.
+        if (error && status !== 406) throw error; // Fehler werfen, wenn nicht "not found"
+
+        if (data) {
+            currentUserProfile = data;
+            console.log('User profile loaded:', currentUserProfile);
+        } else {
+            currentUserProfile = null;
+            console.log('No profile found for user:', userId);
+        }
+    } catch (error) {
+         console.error('Error loading user profile:', error);
+         currentUserProfile = null;
+         // Zeige dem User evtl. eine Fehlermeldung, dass Profildaten nicht geladen werden konnten
+         showUserMessage(`Fehler beim Laden der Benutzerdaten: ${error.message}`, 'error', 0);
     }
 }
 
@@ -107,7 +113,7 @@ async function loadInitialTournamentData() {
     console.log("Loading initial tournament data...");
     // Lade alle Matches für das (aktuelle) Turnier
     // Annahme: Es gibt nur ein Turnier oder eine ID ist bekannt
-    const { data: matchesData, error: matchesError } = await supabase
+    const { data: matchesData, error: matchesError } = await supabaseClient
         .from('matches')
         .select('*'); // Später evtl. filtern nach Turnier-ID
 
@@ -124,7 +130,7 @@ async function loadInitialTournamentData() {
     }
 
     // Lade alle Teilnehmer-Profile (könnte später optimiert werden)
-    const { data: profilesData, error: profilesError } = await supabase
+    const { data: profilesData, error: profilesError } = await supabaseClient
         .from('profiles')
         .select('*'); // Hole alle Profile
 
@@ -670,7 +676,7 @@ async function handleResultSubmit(e) {
     showMessage('result-modal-message', 'Ergebnis wird übermittelt...', false);
 
     // Update in Supabase DB
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
         .from('matches')
         .update({
             score1: score1,
@@ -814,7 +820,7 @@ async function handleConfirmAccept() {
     showMessage('confirm-modal-message', 'Bestätigung wird gesendet...', false);
 
     // Update Status in Supabase auf 'confirmed'
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
         .from('matches')
         .update({ status: 'confirmed' })
         .eq('id', matchId)
@@ -843,7 +849,7 @@ async function handleConfirmReject() {
     showMessage('confirm-modal-message', 'Ablehnung wird gesendet...', false);
 
     // Update Status in Supabase auf 'disputed'
-    const { data, error } = await supabase
+    const { data, error } = await supabaseClient
         .from('matches')
         .update({ status: 'disputed' }) // Status auf "umstritten"
         .eq('id', matchId)
@@ -953,7 +959,7 @@ async function generateGroupsAndMatches() {
 
     // 4. Füge Matches in Supabase ein
     console.log(`Inserting ${matchesToInsert.length} group matches...`);
-    const { data: insertedMatches, error: insertError } = await supabase
+    const { data: insertedMatches, error: insertError } = await supabaseClient
         .from('matches')
         .insert(matchesToInsert)
         .select(); // Gib die eingefügten Matches zurück
@@ -1014,7 +1020,7 @@ async function seedKnockoutBracketFromDB() {
      });
 
     // Füge die KO-Matches in die DB ein
-    const { data: insertedKoMatches, error: insertKoError } = await supabase
+    const { data: insertedKoMatches, error: insertKoError } = await supabaseClient
         .from('matches')
         .insert(koMatchesToInsert)
         .select(); // Wichtig: Hole die generierten IDs zurück!
@@ -1088,7 +1094,7 @@ async function seedKnockoutBracketFromDB() {
 async function triggerKnockoutUpdate(confirmedMatchId) {
     console.log(`Triggering KO update based on match ${confirmedMatchId}`);
     // 1. Lade das bestätigte Match und das nächste Match für Gewinner/Verlierer
-    const { data: completedMatchData, error: fetchError } = await supabase
+    const { data: completedMatchData, error: fetchError } = await supabaseClient
         .from('matches')
         .select('*, player1:player1_id(*), player2:player2_id(*), winner:winner_id(*), loser:loser_id(*)') // Hole verknüpfte Profile
         .eq('id', confirmedMatchId)
@@ -1120,7 +1126,7 @@ async function triggerKnockoutUpdate(confirmedMatchId) {
     if (completedMatchData.winner_to_match_id) {
         const nextMatchId = completedMatchData.winner_to_match_id;
         // Finde heraus, ob player1 oder player2 gesetzt werden muss
-        const { data: nextMatch, error: nextFetchError } = await supabase
+        const { data: nextMatch, error: nextFetchError } = await supabaseClient
             .from('matches').select('player1_id, player2_id').eq('id', nextMatchId).single();
 
         if (nextFetchError || !nextMatch) { console.error(`Next match ${nextMatchId} not found!`); }
@@ -1145,7 +1151,7 @@ async function triggerKnockoutUpdate(confirmedMatchId) {
              // storeQuarterFinalLoserInDB(loserId, loserScore); // Funktion, die in DB speichert oder markiert
          } else {
              // Finde heraus, ob player1 oder player2 gesetzt werden muss
-             const { data: loserMatch, error: loserFetchError } = await supabase
+             const { data: loserMatch, error: loserFetchError } = await supabaseClient
                  .from('matches').select('player1_id, player2_id').eq('id', loserMatchId).single();
 
              if (loserFetchError || !loserMatch) { console.error(`Loser match ${loserMatchId} not found!`); }
@@ -1211,7 +1217,7 @@ async function handleGenerateTournament() {
 
 async function handleSeedKo() {
      // 1. Prüfen, ob alle Gruppenspiele 'confirmed' sind (DB Abfrage)
-     const { data: groupMatches, error: fetchGroupError } = await supabase
+     const { data: groupMatches, error: fetchGroupError } = await supabaseClient
          .from('matches')
          .select('status')
          .eq('round_type', 'group');
