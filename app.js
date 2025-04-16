@@ -58,28 +58,83 @@ const confirmRejectBtn = document.getElementById('confirm-result-reject-btn');
 // --- Kernfunktionen (Auth, Daten laden, UI) ---
 
 // Wird bei Login/Logout aufgerufen
+// Event Listener für Änderungen im Login-Status
 supabaseClient.auth.onAuthStateChange(async (_event, session) => {
-    if (session && currentSession?.user?.id !== session.user.id) { // Nur bei echtem Wechsel oder erstem Laden
-        console.log('Auth State Changed: User logged in', session.user.id);
-        currentSession = session;
-        await loadUserProfile(session.user.id); // Lade Profil aus 'profiles' Tabelle
-        await loadInitialTournamentData(); // Lade Matches etc.
-    } else if (!session && currentSession) { // Nur wenn vorher eingeloggt
-        console.log('Auth State Changed: User logged out');
-        currentSession = null;
+    console.log("onAuthStateChange: Event received. Event:", _event, "Session:", session); // LOG A
+    const sessionChanged = currentSession?.user?.id !== session?.user?.id;
+    const justLoggedOut = !session && currentSession;
+
+    const previousSessionUserId = currentSession?.user?.id; // Merken für Vergleich
+    currentSession = session; // Immer aktuelle Session speichern
+
+    if (sessionChanged || justLoggedOut) {
+        console.log("onAuthStateChange: Unsubscribing old realtime listeners."); // LOG B
+        unsubscribeAllRealtime();
         currentUserProfile = null;
-        currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} }; // Reset Cache
-        unsubscribeAllRealtime(); // Listener abmelden
-    } else if (session && !currentUserProfile) {
-        // User ist eingeloggt, aber Profil wurde noch nicht geladen (z.B. nach Refresh)
-        console.log('Auth State Stable: User logged in, reloading profile/data');
-        currentSession = session;
-        await loadUserProfile(session.user.id);
-        await loadInitialTournamentData();
+        currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} };
+        if (justLoggedOut) {
+            console.log('onAuthStateChange: User logged out.'); // LOG C
+        }
     }
-    // Update die UI basierend auf dem neuen Zustand
-    setupInitialView();
+
+    if (session) {
+         console.log(`onAuthStateChange: Session exists for user ${session.user.id}. Trying to load profile.`); // LOG D
+         // Lade Profil nur, wenn es noch nicht geladen ist ODER der User gewechselt hat
+         if (!currentUserProfile || currentUserProfile.id !== session.user.id) {
+              await loadUserProfile(session.user.id);
+         } else {
+              console.log("onAuthStateChange: Profile already loaded for this user."); // LOG E
+         }
+
+        // Lade Turnierdaten nur, wenn User gewechselt hat oder Daten fehlen
+         if (sessionChanged || currentTournamentData.matches.length === 0) {
+            console.log("onAuthStateChange: Triggering loadInitialTournamentData."); // LOG F
+            await loadInitialTournamentData();
+         }
+
+        console.log("onAuthStateChange: Subscribing to realtime matches."); // LOG G
+        subscribeToRelevantMatches();
+    } else {
+         console.log("onAuthStateChange: No session, skipping profile/data load and subscriptions."); // LOG H
+    }
+
+    console.log("onAuthStateChange: Calling setupInitialView."); // LOG I
+    setupInitialView(); // UI immer anpassen
+    console.log("onAuthStateChange: Finished."); // LOG J
 });
+
+// Lädt das Benutzerprofil aus der 'profiles' Tabelle
+async function loadUserProfile(userId) {
+    console.log(`loadUserProfile: Attempting to load profile for user ID: ${userId}`); // LOG K
+    currentUserProfile = null; // Reset vor dem Laden
+    try {
+        console.log("loadUserProfile: Calling supabaseClient.from('profiles')..."); // LOG L
+        const { data, error, status } = await supabaseClient // <--- Sicherstellen, dass hier supabaseClient steht!
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single();
+        console.log("loadUserProfile: supabaseClient.from('profiles') returned. Error:", error, "Status:", status, "Data:", data); // LOG M
+
+        if (error && status !== 406) { // 406 = Not found
+            console.error("loadUserProfile: Throwing error."); // LOG N
+            throw error;
+        }
+
+        if (data) {
+            currentUserProfile = data;
+            console.log('loadUserProfile: User profile loaded successfully:', currentUserProfile); // LOG O
+        } else {
+            console.log('loadUserProfile: No profile found for user:', userId); // LOG P
+             showUserMessage(`Kein Benutzerprofil gefunden. Möglicherweise muss es noch erstellt werden (Trigger?).`, 'info', 5000);
+        }
+    } catch (error) {
+        console.error('loadUserProfile: Caught an error:', error); // LOG Q
+        showUserMessage(`Fehler beim Laden der Benutzerdaten: ${error.message}`, 'error', 0);
+        currentUserProfile = null; // Sicherstellen, dass Profil null ist bei Fehler
+    }
+    console.log("loadUserProfile: Function finished."); // LOG R
+}
 
 // Lädt das Benutzerprofil aus der 'profiles' Tabelle
 async function loadUserProfile(userId) {
