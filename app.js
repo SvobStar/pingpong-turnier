@@ -287,6 +287,22 @@ function getParticipantById(profileId) {
     return currentTournamentData.participants.find(p => p.id === profileId);
 }
 
+// Hilfsfunktion zum Anzeigen/Verstecken von Ladezuständen
+function setLoadingState(buttonElement, isLoading, loadingText = "Wird geladen...") {
+    if (!buttonElement) return;
+    if (isLoading) {
+        buttonElement.disabled = true;
+        // Speichere Originaltext, falls noch nicht gespeichert
+        if (!buttonElement.dataset.originalText) {
+            buttonElement.dataset.originalText = buttonElement.textContent;
+        }
+        buttonElement.textContent = loadingText;
+    } else {
+        buttonElement.disabled = false;
+        // Stelle Originaltext wieder her
+        buttonElement.textContent = buttonElement.dataset.originalText || 'Aktion ausführen';
+    }
+}
 
 // --- Authentifizierungs-Handler (Phase 2 - Supabase) ---
 
