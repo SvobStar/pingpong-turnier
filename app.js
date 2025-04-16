@@ -261,6 +261,12 @@ function getParticipantById(profileId) {
 
 async function handleRegister(e) {
     e.preventDefault();
+    const registerButton = e.target.querySelector('button[type="submit"]');
+    setLoadingState(registerButton, true, "Registriere...");
+    // Wähle das korrekte Nachrichtenfeld im Registrierungsformular
+    const messageElementId = 'register-message'; // ID des <p> Tags im Register-Formular
+    showMessage(messageElementId, '', false); // Alte Nachrichten löschen
+
     // Hole Formulardaten
     const firstName = document.getElementById('register-firstname').value.trim();
     const lastName = document.getElementById('register-lastname').value.trim();
@@ -269,52 +275,52 @@ async function handleRegister(e) {
     const phone = document.getElementById('register-phone').value.trim();
     const password = document.getElementById('register-password').value;
 
-    // Validierungen (wie vorher) ...
+    // Validierungen
     if (!firstName || !lastName || !username || !email || !phone || !password || password.length < 6) {
-        showMessage('register-message', 'Bitte alle Felder korrekt ausfüllen (Passwort mind. 6 Zeichen).');
+        showMessage(messageElementId, 'Bitte alle Felder korrekt ausfüllen (Passwort mind. 6 Zeichen).');
+        setLoadingState(registerButton, false);
         return;
     }
 
-    showMessage('register-message', 'Registrierung wird verarbeitet...', false);
-
-    const { data, error } = await supabaseClient.auth.signUp({
-        email: email,
-        password: password,
-        options: {
-            // Diese Daten landen in auth.users.raw_user_meta_data
-            // EMPFEHLUNG: Supabase Trigger erstellen, der diese Daten
-            // automatisch in deine 'profiles' Tabelle kopiert, wenn ein neuer User erstellt wird!
-            data: {
-                username: username,
-                firstname: firstName,
-                lastname: lastName,
-                phone: phone,
-                // Optional: Flag setzen, dass Profil erstellt werden muss
-                profile_needs_setup: true
+    try {
+        // Supabase signUp Aufruf
+        const { data, error } = await supabaseClient.auth.signUp({
+            email: email,
+            password: password,
+            options: {
+                data: {
+                    username: username,
+                    firstname: firstName,
+                    lastname: lastName,
+                    phone: phone
+                }
             }
-        }
-    });
+        });
 
-    if (error) {
-        // Fehlerbehandlung bleibt gleich
-        console.error("Signup Error:", error);
-        showUserMessage(`Registrierungsfehler: ${error.message}`, 'error', 0); // Nutze showUserMessage
-    } else {
-        // Erfolgsfall - Nachricht verbessert
-        console.log("Signup successful:", data);
-        // Klare Nachricht, da wir wissen, dass Bestätigung AN ist
-        showUserMessage('Registrierung fast abgeschlossen! Bitte prüfe dein E-Mail Postfach (' + email + ') und klicke auf den Bestätigungslink, um den Vorgang abzuschliessen.', 'success', 10000); // Längere Anzeige
+        if (error) {
+            // Fehlerfall
+            console.error("Signup Error:", error);
+            // Zeige Fehler im Nachrichtenfeld des Formulars an
+            showMessage(messageElementId, `Registrierungsfehler: ${error.message}`);
+        } else {
+            // Erfolgsfall
+            console.log("Signup successful:", data);
+            // Klare Nachricht für den User, da Bestätigung aktiviert ist
+            showUserMessage('Registrierung fast abgeschlossen! Bitte prüfe dein E-Mail Postfach (' + email + ') und klicke auf den Bestätigungslink, um den Vorgang abzuschliessen.', 'success', 10000); // Längere Anzeige im Haupt-Nachrichtenbereich
 
-        registerForm.reset(); // Formular leeren
-        showAuthForm(loginForm); // Zum Login wechseln
-    } else {
-        // Wenn E-Mail Bestätigung DEAKTIVIERT ist:
-             showMessage('register-message', 'Registrierung erfolgreich! Du kannst dich jetzt anmelden.', true);
-             showAuthForm(loginForm); // Zeige Login Form
+            registerForm.reset(); // Formular leeren
+            showAuthForm(loginForm); // Zum Login-Formular wechseln
         }
-        // Kein automatischer Login, User muss sich anmelden. onAuthStateChange reagiert dann.
+
+    } catch (error) {
+        // Fängt Fehler ab, falls schon der await-Aufruf selbst fehlschlägt
+        console.error("Signup Exception:", error);
+        showMessage(messageElementId, `Ein unerwarteter Fehler ist aufgetreten: ${error.message}`);
+    } finally {
+        // Wird immer ausgeführt, egal ob Erfolg oder Fehler
+        setLoadingState(registerButton, false); // Ladezustand des Buttons beenden
     }
-}
+} // Ende der handleRegister Funktion
 
 async function handleLogin(e) {
     e.preventDefault();
