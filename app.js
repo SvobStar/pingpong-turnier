@@ -355,28 +355,45 @@ async function handleRegister(e) {
 
 async function handleLogin(e) {
     e.preventDefault();
-    const loginIdentifier = document.getElementById('login-username').value.trim(); // E-Mail oder Username? Annahme: E-Mail
+    console.log("handleLogin: Function started."); // LOG 1
+
+    const loginButton = e.target.querySelector('button[type="submit"]');
+    setLoadingState(loginButton, true, "Anmelden...");
+    // Wähle das korrekte Nachrichtenfeld im Login-Formular
+    const messageElementId = 'login-message';
+    showMessage(messageElementId, '', false); // Alte Modal-Nachricht löschen
+
+    const loginIdentifier = document.getElementById('login-username').value.trim();
     const password = document.getElementById('login-password').value;
 
-    showMessage('login-message', 'Anmeldung wird geprüft...', false);
+    console.log("handleLogin: Attempting login for:", loginIdentifier); // LOG 2
 
-    // Versuche Login mit E-Mail
-    const { data, error } = await supabaseClient.auth.signInWithPassword({
-        email: loginIdentifier,
-        password: password,
-    });
+    try {
+        console.log("handleLogin: Calling supabaseClient.auth.signInWithPassword..."); // LOG 3
+        const { data, error } = await supabaseClient.auth.signInWithPassword({
+            email: loginIdentifier,
+            password: password,
+        });
+        console.log("handleLogin: signInWithPassword call returned."); // LOG 4
 
-    // TODO: Wenn Login per E-Mail fehlschlägt, könnte man versuchen, den User anhand des Usernamens
-    // in der 'profiles' Tabelle zu finden und dann dessen E-Mail für den Login zu verwenden.
-    // Erfordert eine zusätzliche Abfrage.
+        if (error) {
+            console.error("handleLogin: Login Error returned by Supabase:", error); // LOG 5
+            throw error; // Wirf den Fehler, um in den catch-Block zu gelangen
+        }
 
-    if (error) {
-        console.error("Login Error:", error);
-        showMessage('login-message', `Login fehlgeschlagen: ${error.message}`);
-    } else {
-        console.log("Login successful:", data);
-        showMessage('login-message', 'Login erfolgreich!', true);
-        // UI wird durch onAuthStateChange aktualisiert, sobald Profil geladen ist
+        console.log("handleLogin: Login successful (API call). Data:", data); // LOG 6
+        // Hier sollte eigentlich nichts mehr passieren, onAuthStateChange übernimmt.
+        // Die Erfolgsnachricht wird idealerweise von onAuthStateChange gesetzt.
+
+    } catch (error) {
+        console.error("handleLogin: Caught an error:", error); // LOG 7
+        // Zeige Fehler im Nachrichtenfeld des Formulars an
+        showMessage(messageElementId, `Login fehlgeschlagen: ${error.message}`);
+    } finally {
+        console.log("handleLogin: Entering finally block."); // LOG 8
+        // Ladezustand hier *immer* beenden, auch wenn onAuthStateChange übernimmt
+        setLoadingState(loginButton, false);
+        console.log("handleLogin: setLoadingState(false) called."); // LOG 9
     }
 }
 
