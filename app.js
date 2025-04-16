@@ -104,36 +104,35 @@ supabaseClient.auth.onAuthStateChange(async (_event, session) => {
 });
 
 // Lädt das Benutzerprofil aus der 'profiles' Tabelle
+// Temporär vereinfachte loadUserProfile zum Testen
 async function loadUserProfile(userId) {
-    console.log(`loadUserProfile: Attempting to load profile for user ID: ${userId}`); // LOG K
-    currentUserProfile = null; // Reset vor dem Laden
+    console.log(`loadUserProfile (SIMPLIFIED): Started for user ID: ${userId}`); // LOG K (modifiziert)
+    currentUserProfile = null; // Reset
     try {
-        console.log("loadUserProfile: Calling supabaseClient.from('profiles')..."); // LOG L
-        const { data, error, status } = await supabaseClient // <--- Sicherstellen, dass hier supabaseClient steht!
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .single();
-        console.log("loadUserProfile: supabaseClient.from('profiles') returned. Error:", error, "Status:", status, "Data:", data); // LOG M
+        console.log("loadUserProfile (SIMPLIFIED): Bypassing database call for now."); // LOG L (modifiziert)
 
-        if (error && status !== 406) { // 406 = Not found
-            console.error("loadUserProfile: Throwing error."); // LOG N
-            throw error;
-        }
+        // ---- DATABASE CALL AUSKOMMENTIERT ----
+        // const { data, error, status } = await supabaseClient
+        //     .from('profiles')
+        //     .select('*')
+        //     .eq('id', userId)
+        //     .single();
+        // console.log("loadUserProfile: supabaseClient.from('profiles') returned. Error:", error, "Status:", status, "Data:", data); // LOG M
+        // if (error && status !== 406) { throw error; }
+        // if (data) { currentUserProfile = data; }
+        // -------------------------------------
 
-        if (data) {
-            currentUserProfile = data;
-            console.log('loadUserProfile: User profile loaded successfully:', currentUserProfile); // LOG O
-        } else {
-            console.log('loadUserProfile: No profile found for user:', userId); // LOG P
-             showUserMessage(`Kein Benutzerprofil gefunden. Möglicherweise muss es noch erstellt werden (Trigger?).`, 'info', 5000);
-        }
+        // Setze Profil auf null oder Dummy-Wert zum Testen
+        currentUserProfile = { id: userId, username: 'TestProfil', email:'test@test.com' }; // Setze ein Dummy-Profil, um zu sehen, ob der Rest läuft
+
+        console.log('loadUserProfile (SIMPLIFIED): Finished successfully (simulation). Profile:', currentUserProfile); // LOG O (modifiziert)
+
     } catch (error) {
-        console.error('loadUserProfile: Caught an error:', error); // LOG Q
-        showUserMessage(`Fehler beim Laden der Benutzerdaten: ${error.message}`, 'error', 0);
-        currentUserProfile = null; // Sicherstellen, dass Profil null ist bei Fehler
+        console.error('loadUserProfile (SIMPLIFIED): Caught an error (should not happen here):', error); // LOG Q (modifiziert)
+        showUserMessage(`Fehler (Simulation): ${error.message}`, 'error', 0);
+        currentUserProfile = null;
     }
-    console.log("loadUserProfile: Function finished."); // LOG R
+    console.log("loadUserProfile (SIMPLIFIED): Function finished."); // LOG R (modifiziert)
 }
 
 // Lädt das Benutzerprofil aus der 'profiles' Tabelle
