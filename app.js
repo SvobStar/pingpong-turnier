@@ -108,6 +108,37 @@ async function loadUserProfile(userId) {
     }
 }
 
+async function handlePasswordReset(event) {
+    event.preventDefault(); // Verhindert, dass der Link die Seite neu lädt
+    const email = prompt("Bitte gib deine registrierte E-Mail-Adresse ein, um dein Passwort zurückzusetzen:");
+
+    if (!email) {
+        showUserMessage("Passwort-Reset abgebrochen.", "info");
+        return;
+    }
+
+    showUserMessage("Sende Anweisungen zum Zurücksetzen...", "info");
+    const resetButton = document.getElementById('forgot-password-link'); // Referenz zum Link
+    if(resetButton) setLoadingState(resetButton, true, "Sende..."); // Zeige Ladezustand am Link
+
+    try {
+        // Verwende die Voreinstellung, um den Link an die konfigurierte Site URL zu senden
+        const { data, error } = await supabaseClient.auth.resetPasswordForEmail(email, {
+             redirectTo: '', // Leer lassen, damit Supabase die konfigurierte Site URL verwendet!
+        });
+
+        if (error) throw error;
+
+        showUserMessage("Wenn ein Konto mit dieser E-Mail existiert, wurden Anweisungen zum Zurücksetzen gesendet. Bitte prüfe dein Postfach.", "success", 10000);
+
+    } catch (error) {
+        console.error("Password Reset Error:", error);
+        showUserMessage(`Fehler beim Zurücksetzen: ${error.message}`, "error", 0);
+    } finally {
+         if(resetButton) setLoadingState(resetButton, false, "Passwort vergessen?"); // Ladezustand beenden
+    }
+}
+
 // Lädt initiale Turnierdaten (Matches, Teilnehmer)
 async function loadInitialTournamentData() {
     console.log("Loading initial tournament data...");
@@ -1270,6 +1301,9 @@ function addEventListeners() {
         // Kein Speichern in localStorage mehr nötig
         displayTournamentPlan(); // Filterung geschieht clientseitig beim Rendern
     });
+
+    // Innerhalb der addEventListeners Funktion
+    document.getElementById('forgot-password-link')?.addEventListener('click', handlePasswordReset);
 
     // Modals
     closeResultModalBtn?.addEventListener('click', () => resultModal.classList.add('hidden'));
