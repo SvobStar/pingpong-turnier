@@ -111,33 +111,17 @@ supabaseClient.auth.onAuthStateChange(async (_event, session) => {
     console.log("onAuthStateChange: Finished."); // LOG J
 });
 
-// NEUE TESTVERSION von loadUserProfile
-async function loadUserProfile(userId) {
-    console.log(`loadUserProfile (TEST CALL): Started for user ID: ${userId}`); // LOG K (Test)
-    currentUserProfile = null; // Reset zur Sicherheit
-    try {
-        console.log("loadUserProfile (TEST CALL): Before simple await call..."); // LOG L (Test)
+// ULTRA-VEREINFACHTE, SYNCHRONE loadUserProfile
+function loadUserProfile(userId) {
+    console.log(`loadUserProfile (SYNC-ULTRA): Started for user ID: ${userId}`); // LOG K (ultra)
+    currentUserProfile = null; // Reset
 
-        // VERSUCHE einen ganz anderen, einfachen Supabase await-Aufruf:
-        const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
+    // KEIN try...catch, KEIN await
+    console.log("loadUserProfile (SYNC-ULTRA): Setting dummy profile."); // LOG L (ultra)
+    currentUserProfile = { id: userId, username: 'TestSync', email:'test@test.com' };
 
-        console.log("loadUserProfile (TEST CALL): AFTER simple await call."); // LOG M (Test)
-
-        if (sessionError) {
-             console.error("loadUserProfile (TEST CALL): Error during getSession:", sessionError); // LOG N (Test)
-             throw sessionError; // Wirf Fehler in den catch Block
-        }
-
-        console.log("loadUserProfile (TEST CALL): getSession successful. Session User ID:", sessionData?.session?.user?.id); // LOG O (Test)
-        // Setze Dummy-Profil, da wir die echten Daten nicht geladen haben
-        currentUserProfile = { id: userId, username: 'TestCallOK', email: sessionData?.session?.user?.email || 'test@test.com' };
-
-    } catch (error) {
-        console.error('loadUserProfile (TEST CALL): Caught an error:', error); // LOG Q (Test)
-        showUserMessage(`Fehler im Testaufruf: ${error.message}`, 'error', 0);
-        currentUserProfile = null;
-    }
-    console.log("loadUserProfile (TEST CALL): Function finished."); // LOG R (Test)
+    console.log('loadUserProfile (SYNC-ULTRA): Dummy profile set:', currentUserProfile); // LOG O (ultra)
+    console.log("loadUserProfile (SYNC-ULTRA): Function finished."); // LOG R (ultra)
 }
 
 async function handlePasswordReset(event) {
