@@ -112,38 +112,6 @@ supabaseClient.auth.onAuthStateChange(async (_event, session) => {
 });
 
 // Lädt das Benutzerprofil aus der 'profiles' Tabelle
-// Temporär vereinfachte loadUserProfile zum Testen
-async function loadUserProfile(userId) {
-    console.log(`loadUserProfile (SIMPLIFIED): Started for user ID: ${userId}`); // LOG K (modifiziert)
-    currentUserProfile = null; // Reset
-    try {
-        console.log("loadUserProfile (SIMPLIFIED): Bypassing database call for now."); // LOG L (modifiziert)
-
-        // ---- DATABASE CALL AUSKOMMENTIERT ----
-        // const { data, error, status } = await supabaseClient
-        //     .from('profiles')
-        //     .select('*')
-        //     .eq('id', userId)
-        //     .single();
-        // console.log("loadUserProfile: supabaseClient.from('profiles') returned. Error:", error, "Status:", status, "Data:", data); // LOG M
-        // if (error && status !== 406) { throw error; }
-        // if (data) { currentUserProfile = data; }
-        // -------------------------------------
-
-        // Setze Profil auf null oder Dummy-Wert zum Testen
-        currentUserProfile = { id: userId, username: 'TestProfil', email:'test@test.com' }; // Setze ein Dummy-Profil, um zu sehen, ob der Rest läuft
-
-        console.log('loadUserProfile (SIMPLIFIED): Finished successfully (simulation). Profile:', currentUserProfile); // LOG O (modifiziert)
-
-    } catch (error) {
-        console.error('loadUserProfile (SIMPLIFIED): Caught an error (should not happen here):', error); // LOG Q (modifiziert)
-        showUserMessage(`Fehler (Simulation): ${error.message}`, 'error', 0);
-        currentUserProfile = null;
-    }
-    console.log("loadUserProfile (SIMPLIFIED): Function finished."); // LOG R (modifiziert)
-}
-
-// Lädt das Benutzerprofil aus der 'profiles' Tabelle
 async function loadUserProfile(userId) {
     console.log(`Attempting to load profile for user ID: ${userId}`);
     try { // Füge try...catch hinzu für bessere Fehlerbehandlung
