@@ -57,132 +57,127 @@ const confirmRejectBtn = document.getElementById('confirm-result-reject-btn');
 
 // --- Kernfunktionen (Auth, Daten laden, UI) ---
 
-// Version von onAuthStateChange OHNE async Callback und OHNE weitere Supabase Calls
-supabaseClient.auth.onAuthStateChange((_event, session) => { // async hier entfernt!
-    console.log("onAuthStateChange (SYNC-TEST): Event received. Event:", _event); // LOG A (sync-test)
+// Endgültige Version von onAuthStateChange (Callback ist synchron)
+supabaseClient.auth.onAuthStateChange((_event, session) => { // KEIN async hier!
+    console.log("onAuthStateChange (FINAL): Event received. Event:", _event); // LOG A
     const sessionChanged = currentSession?.user?.id !== session?.user?.id;
     const justLoggedOut = !session && currentSession;
-    currentSession = session; // Session speichern
+    currentSession = session;
 
     if (sessionChanged || justLoggedOut) {
-         console.log("onAuthStateChange (SYNC-TEST): Unsubscribing/Resetting..."); // LOG B (sync-test)
-         unsubscribeAllRealtime();
-         currentUserProfile = null;
-         currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} };
-         if(justLoggedOut) console.log('onAuthStateChange (SYNC-TEST): User logged out.'); // LOG C
+        console.log("onAuthStateChange (FINAL): Unsubscribing/Resetting..."); // LOG B
+        unsubscribeAllRealtime();
+        currentUserProfile = null;
+        currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} };
+        if (justLoggedOut) console.log('onAuthStateChange (FINAL): User logged out.'); // LOG C
     }
 
     if (session) {
-        console.log(`onAuthStateChange (SYNC-TEST): Session exists for user ${session.user.id}.`); // LOG D
+        console.log(`onAuthStateChange (FINAL): Session exists for user ${session.user.id}.`); // LOG D
+
+        // Lade Profil und Daten asynchron im Hintergrund (OHNE await hier!)
+        // Nur starten, wenn nötig
         if (!currentUserProfile || currentUserProfile.id !== session.user.id) {
-             console.log("onAuthStateChange (SYNC-TEST): ===> BEFORE calling loadUserProfile (SYNC-ULTRA)..."); // LOG 10
-             // Rufe die ultra-vereinfachte, synchrone Funktion auf
-             loadUserProfile(session.user.id);
-             console.log("onAuthStateChange (SYNC-TEST): ===> AFTER calling loadUserProfile (SYNC-ULTRA)."); // LOG 11
+             console.log("onAuthStateChange (FINAL): Triggering loadUserProfile (no await).");
+             loadUserProfile(session.user.id); // Startet Laden, blockiert aber nicht
         } else {
-             console.log("onAuthStateChange (SYNC-TEST): Profile already loaded (dummy)."); // LOG E
+             console.log("onAuthStateChange (FINAL): Profile already cached.");
         }
 
-        // !!! NÄCHSTE SUPABASE AUFRUFE HIER AUSKOMMENTIERT FÜR DEN TEST !!!
-        // console.log("onAuthStateChange (SYNC-TEST): SKIPPING loadInitialTournamentData call."); // LOG F (skipped)
-        // console.log("onAuthStateChange (SYNC-TEST): SKIPPING subscribeToRelevantMatches call."); // LOG G (skipped)
+        if (sessionChanged || currentTournamentData.matches.length === 0) {
+             console.log("onAuthStateChange (FINAL): Triggering loadInitialTournamentData (no await).");
+             loadInitialTournamentData(); // Startet Laden, blockiert aber nicht
+        }
 
+        console.log("onAuthStateChange (FINAL): Triggering subscribeToRelevantMatches."); // LOG G
+        subscribeToRelevantMatches(); // Startet Listener
     } else {
-         console.log("onAuthStateChange (SYNC-TEST): No session."); // LOG H
+        console.log("onAuthStateChange (FINAL): No session."); // LOG H
     }
 
-    console.log("onAuthStateChange (SYNC-TEST): Calling setupInitialView."); // LOG I
-    setupInitialView();
-    console.log("onAuthStateChange (SYNC-TEST): Finished."); // LOG J
+    // Rufe setupInitialView *sofort* auf (zeigt ggf. Ladezustand oder alten Zustand)
+    // Die UI wird dann durch die Ladefunktionen aktualisiert, wenn sie fertig sind.
+    console.log("onAuthStateChange (FINAL): Calling setupInitialView."); // LOG I
+    setupInitialView(); // Zeigt basierend auf *aktuellem* Stand von currentUserProfile etc.
+    console.log("onAuthStateChange (FINAL): Finished quickly."); // LOG J
 });
 
-// ULTRA-VEREINFACHTE, SYNCHRONE loadUserProfile
-function loadUserProfile(userId) {
-    console.log(`loadUserProfile (SYNC-ULTRA): Started for user ID: ${userId}`); // LOG K (ultra)
-    currentUserProfile = null; // Reset
-
-    // KEIN try...catch, KEIN await
-    console.log("loadUserProfile (SYNC-ULTRA): Setting dummy profile."); // LOG L (ultra)
-    currentUserProfile = { id: userId, username: 'TestSync', email:'test@test.com' };
-
-    console.log('loadUserProfile (SYNC-ULTRA): Dummy profile set:', currentUserProfile); // LOG O (ultra)
-    console.log("loadUserProfile (SYNC-ULTRA): Function finished."); // LOG R (ultra)
-}
-
-async function handlePasswordReset(event) {
-    event.preventDefault(); // Verhindert, dass der Link die Seite neu lädt
-    const email = prompt("Bitte gib deine registrierte E-Mail-Adresse ein, um dein Passwort zurückzusetzen:");
-
-    if (!email) {
-        showUserMessage("Passwort-Reset abgebrochen.", "info");
-        return;
-    }
-
-    showUserMessage("Sende Anweisungen zum Zurücksetzen...", "info");
-    const resetButton = document.getElementById('forgot-password-link'); // Referenz zum Link
-    if(resetButton) setLoadingState(resetButton, true, "Sende..."); // Zeige Ladezustand am Link
-
+// Endgültige Version von loadUserProfile
+async function loadUserProfile(userId) {
+    console.log(`loadUserProfile: Attempting to load profile for user ID: ${userId}`); // LOG K
+    let profileLoaded = false;
     try {
-        // Verwende die Voreinstellung, um den Link an die konfigurierte Site URL zu senden
-        const { data, error } = await supabaseClient.auth.resetPasswordForEmail(email, {
-             redirectTo: '', // Leer lassen, damit Supabase die konfigurierte Site URL verwendet!
-        });
+        console.log("loadUserProfile: Calling supabaseClient.from('profiles')..."); // LOG L
+        const { data, error, status } = await supabaseClient
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .single();
+        console.log("loadUserProfile: supabaseClient.from('profiles') returned. Error:", error, "Status:", status); // LOG M (vereinfacht)
 
-        if (error) throw error;
+        if (error && status !== 406) { // 406 = Not found, ist ok
+            console.error("loadUserProfile: Throwing error."); // LOG N
+            throw error;
+        }
 
-        showUserMessage("Wenn ein Konto mit dieser E-Mail existiert, wurden Anweisungen zum Zurücksetzen gesendet. Bitte prüfe dein Postfach.", "success", 10000);
-
+        if (data) {
+            currentUserProfile = data; // Profil speichern
+            profileLoaded = true;
+            console.log('loadUserProfile: User profile loaded successfully:', currentUserProfile); // LOG O
+        } else {
+            currentUserProfile = null; // Sicherstellen, dass es null ist
+            console.log('loadUserProfile: No profile found for user:', userId); // LOG P
+             showUserMessage(`Kein Benutzerprofil gefunden. Evtl. Trigger prüfen?`, 'info', 5000);
+        }
     } catch (error) {
-        console.error("Password Reset Error:", error);
-        showUserMessage(`Fehler beim Zurücksetzen: ${error.message}`, "error", 0);
+        console.error('loadUserProfile: Caught an error:', error); // LOG Q
+        showUserMessage(`Fehler beim Laden der Benutzerdaten: ${error.message}`, 'error', 0);
+        currentUserProfile = null;
     } finally {
-         if(resetButton) setLoadingState(resetButton, false, "Passwort vergessen?"); // Ladezustand beenden
+         console.log("loadUserProfile: Function finished."); // LOG R
+         // ---- WICHTIG: UI nach Laden des Profils aktualisieren! ----
+         console.log("loadUserProfile: Triggering UI update after profile load attempt.");
+         setupInitialView(); // Aktualisiert Anzeige basierend auf currentUserProfile
+         updateLeaderboard(); // Aktualisiert Leaderboard (braucht ggf. Profilinfos)
     }
 }
 
-// Lädt initiale Turnierdaten (Matches, Teilnehmer)
+// Angepasste loadInitialTournamentData mit finally Block
 async function loadInitialTournamentData() {
     console.log("Loading initial tournament data...");
-    // Lade alle Matches für das (aktuelle) Turnier
-    // Annahme: Es gibt nur ein Turnier oder eine ID ist bekannt
-    const { data: matchesData, error: matchesError } = await supabaseClient
-        .from('matches')
-        .select('*'); // Später evtl. filtern nach Turnier-ID
+    let success = false;
+    try {
+        // Paralleles Laden von Matches und Teilnehmern
+        const [matchesResult, profilesResult] = await Promise.all([
+            supabaseClient.from('matches').select('*'),
+            supabaseClient.from('profiles').select('*')
+        ]);
 
-    if (matchesError) {
-        console.error('Error loading matches:', matchesError);
-        currentTournamentData.matches = [];
-    } else {
-        currentTournamentData.matches = matchesData || [];
+        if (matchesResult.error) throw matchesResult.error;
+        currentTournamentData.matches = matchesResult.data || [];
+        currentTournamentData.matches.forEach(m => { if (m.scheduled_time) m.time = new Date(m.scheduled_time); });
         console.log(`Loaded ${currentTournamentData.matches.length} matches.`);
-        // Konvertiere Timestamps aus DB (ISO String) in Date Objekte
-        currentTournamentData.matches.forEach(m => {
-            if (m.scheduled_time) m.time = new Date(m.scheduled_time); // Füge JS Date Objekt hinzu
-        });
+
+        if (profilesResult.error) throw profilesResult.error;
+        currentTournamentData.participants = profilesResult.data || [];
+        console.log(`Loaded ${currentTournamentData.participants.length} participants.`);
+
+        rebuildClientSideTournamentStructure(); // Lokale Strukturen aufbauen
+        success = true;
+
+    } catch (error) {
+        console.error('Error loading initial tournament data:', error);
+        showUserMessage(`Fehler beim Laden der Turnierdaten: ${error.message}`, 'error', 0);
+        currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} }; // Reset Cache
+    } finally {
+         console.log("loadInitialTournamentData: Function finished.");
+         // ---- WICHTIG: UI nach Laden der Turnierdaten aktualisieren! ----
+         console.log("loadInitialTournamentData: Triggering UI update after data load attempt.");
+         // Rendere Turnierplan und Overview neu, da sich Daten geändert haben könnten
+         displayTournamentOverview(); // Stellt sicher, dass Overview aktuell ist (z.B. Leaderboard)
+         displayTournamentPlan(); // Stellt sicher, dass Plan aktuell ist
+         updateLeaderboard();
     }
-
-    // Lade alle Teilnehmer-Profile (könnte später optimiert werden)
-    const { data: profilesData, error: profilesError } = await supabaseClient
-        .from('profiles')
-        .select('*'); // Hole alle Profile
-
-    if (profilesError) {
-        console.error('Error loading participants:', profilesError);
-        currentTournamentData.participants = [];
-    } else {
-        currentTournamentData.participants = profilesData || [];
-         console.log(`Loaded ${currentTournamentData.participants.length} participants.`);
-    }
-
-    // Bereite Gruppen und KO-Struktur clientseitig vor (basierend auf geladenen Matches)
-    rebuildClientSideTournamentStructure();
-    // Starte Echtzeit-Listener für unbestätigte Spiele des aktuellen Users
-    subscribeToRelevantMatches();
-
-    // Update UI nach Laden der Daten
-    displayTournamentOverview();
-    displayTournamentPlan(); // Stellt sicher, dass Plan gerendert wird, falls aktiv
-    updateLeaderboard();
 }
 
 // Baut die clientseitigen Strukturen (groups, knockoutMatches) aus der Match-Liste auf
@@ -240,17 +235,41 @@ function rebuildClientSideTournamentStructure() {
     });
 }
 
-
-// Steuert die initiale UI-Anzeige
+// Angepasste setupInitialView
 function setupInitialView() {
-    if (currentSession && currentUserProfile) { // Prüfe beides!
-        showScreen(mainScreen);
-        displayTournamentOverview(); // Zeige standardmässig Overview
-        // Ggf. Namen im Header anzeigen
-        // document.getElementById('profile-btn').textContent = currentUserProfile.username || '👤';
-    } else {
+    // Füge Logout-Button hinzu, falls noch nicht geschehen (Beispiel)
+    const header = document.querySelector('#main-screen header');
+    let logoutBtn = document.getElementById('logout-btn');
+    if (header && !logoutBtn) { /* ... (Logout Button wie vorher hinzufügen) ... */
+        logoutBtn = document.createElement('button');
+        logoutBtn.id = 'logout-btn'; logoutBtn.textContent = 'Logout'; logoutBtn.style.fontSize = '0.8em'; logoutBtn.style.padding = '5px 10px';
+        logoutBtn.addEventListener('click', handleLogout);
+        header.appendChild(logoutBtn);
+    }
+
+
+    if (currentSession) { // Wenn eine Session existiert...
+        showScreen(mainScreen); // Zeige Hauptbildschirm
+        if(logoutBtn) logoutBtn.style.display = 'inline-block';
+        adminPanel.style.display = 'block'; // TODO: Admin-Rechte prüfen!
+
+        if (currentUserProfile) {
+             // Profil ist geladen, zeige normale Übersicht
+             displayTournamentOverview();
+        } else {
+            // Profil lädt noch oder wurde nicht gefunden
+            console.log("setupInitialView: Session exists, but profile not yet loaded.");
+            // Zeige einen Ladezustand oder eine Basis-Ansicht
+             tournamentOverview.classList.remove('hidden');
+             tournamentPlan.classList.add('hidden');
+             leaderboardList.innerHTML = '<li>Lade Benutzerprofil...</li>'; // Zeige Ladeinfo im Leaderboard
+        }
+
+    } else { // Keine Session
         showScreen(authScreen);
-        showAuthForm(null); // Zeige nur Login/Register Buttons
+        showAuthForm(null);
+        if(logoutBtn) logoutBtn.style.display = 'none';
+        adminPanel.style.display = 'none';
     }
 }
 
