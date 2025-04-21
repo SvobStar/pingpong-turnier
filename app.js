@@ -111,31 +111,33 @@ supabaseClient.auth.onAuthStateChange(async (_event, session) => {
     console.log("onAuthStateChange: Finished."); // LOG J
 });
 
-// Lädt das Benutzerprofil aus der 'profiles' Tabelle
+// NEUE TESTVERSION von loadUserProfile
 async function loadUserProfile(userId) {
-    console.log(`Attempting to load profile for user ID: ${userId}`);
-    try { // Füge try...catch hinzu für bessere Fehlerbehandlung
-        const { data, error, status } = await supabaseClient // <--- KORRIGIERT!
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .single();
+    console.log(`loadUserProfile (TEST CALL): Started for user ID: ${userId}`); // LOG K (Test)
+    currentUserProfile = null; // Reset zur Sicherheit
+    try {
+        console.log("loadUserProfile (TEST CALL): Before simple await call..."); // LOG L (Test)
 
-        if (error && status !== 406) throw error; // Fehler werfen, wenn nicht "not found"
+        // VERSUCHE einen ganz anderen, einfachen Supabase await-Aufruf:
+        const { data: sessionData, error: sessionError } = await supabaseClient.auth.getSession();
 
-        if (data) {
-            currentUserProfile = data;
-            console.log('User profile loaded:', currentUserProfile);
-        } else {
-            currentUserProfile = null;
-            console.log('No profile found for user:', userId);
+        console.log("loadUserProfile (TEST CALL): AFTER simple await call."); // LOG M (Test)
+
+        if (sessionError) {
+             console.error("loadUserProfile (TEST CALL): Error during getSession:", sessionError); // LOG N (Test)
+             throw sessionError; // Wirf Fehler in den catch Block
         }
+
+        console.log("loadUserProfile (TEST CALL): getSession successful. Session User ID:", sessionData?.session?.user?.id); // LOG O (Test)
+        // Setze Dummy-Profil, da wir die echten Daten nicht geladen haben
+        currentUserProfile = { id: userId, username: 'TestCallOK', email: sessionData?.session?.user?.email || 'test@test.com' };
+
     } catch (error) {
-         console.error('Error loading user profile:', error);
-         currentUserProfile = null;
-         // Zeige dem User evtl. eine Fehlermeldung, dass Profildaten nicht geladen werden konnten
-         showUserMessage(`Fehler beim Laden der Benutzerdaten: ${error.message}`, 'error', 0);
+        console.error('loadUserProfile (TEST CALL): Caught an error:', error); // LOG Q (Test)
+        showUserMessage(`Fehler im Testaufruf: ${error.message}`, 'error', 0);
+        currentUserProfile = null;
     }
+    console.log("loadUserProfile (TEST CALL): Function finished."); // LOG R (Test)
 }
 
 async function handlePasswordReset(event) {
