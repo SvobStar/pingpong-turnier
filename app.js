@@ -57,58 +57,43 @@ const confirmRejectBtn = document.getElementById('confirm-result-reject-btn');
 
 // --- Kernfunktionen (Auth, Daten laden, UI) ---
 
-// Wird bei Login/Logout aufgerufen
-// Event Listener für Änderungen im Login-Status
-// Version von onAuthStateChange mit Logs UM den loadUserProfile Aufruf
-supabaseClient.auth.onAuthStateChange(async (_event, session) => {
-    console.log("onAuthStateChange: Event received. Event:", _event); // LOG A (vereinfacht)
+// Version von onAuthStateChange OHNE async Callback und OHNE weitere Supabase Calls
+supabaseClient.auth.onAuthStateChange((_event, session) => { // async hier entfernt!
+    console.log("onAuthStateChange (SYNC-TEST): Event received. Event:", _event); // LOG A (sync-test)
     const sessionChanged = currentSession?.user?.id !== session?.user?.id;
     const justLoggedOut = !session && currentSession;
-    const previousSessionUserId = currentSession?.user?.id;
-    currentSession = session;
+    currentSession = session; // Session speichern
 
     if (sessionChanged || justLoggedOut) {
-        console.log("onAuthStateChange: Unsubscribing old realtime listeners."); // LOG B
-        unsubscribeAllRealtime();
-        currentUserProfile = null;
-        currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} };
-        if (justLoggedOut) console.log('onAuthStateChange: User logged out.'); // LOG C
+         console.log("onAuthStateChange (SYNC-TEST): Unsubscribing/Resetting..."); // LOG B (sync-test)
+         unsubscribeAllRealtime();
+         currentUserProfile = null;
+         currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} };
+         if(justLoggedOut) console.log('onAuthStateChange (SYNC-TEST): User logged out.'); // LOG C
     }
 
     if (session) {
-        console.log(`onAuthStateChange: Session exists for user ${session.user.id}.`); // LOG D (vereinfacht)
+        console.log(`onAuthStateChange (SYNC-TEST): Session exists for user ${session.user.id}.`); // LOG D
         if (!currentUserProfile || currentUserProfile.id !== session.user.id) {
-            console.log("onAuthStateChange: ===> BEFORE calling await loadUserProfile..."); // NEUER LOG 10
-            try {
-                await loadUserProfile(session.user.id);
-                console.log("onAuthStateChange: ===> AFTER calling await loadUserProfile."); // NEUER LOG 11
-            } catch (loadProfileError) {
-                 console.error("onAuthStateChange: Error DURING loadUserProfile call:", loadProfileError); // NEUER LOG 12
-            }
+             console.log("onAuthStateChange (SYNC-TEST): ===> BEFORE calling loadUserProfile (SYNC-ULTRA)..."); // LOG 10
+             // Rufe die ultra-vereinfachte, synchrone Funktion auf
+             loadUserProfile(session.user.id);
+             console.log("onAuthStateChange (SYNC-TEST): ===> AFTER calling loadUserProfile (SYNC-ULTRA)."); // LOG 11
         } else {
-            console.log("onAuthStateChange: Profile already loaded."); // LOG E
+             console.log("onAuthStateChange (SYNC-TEST): Profile already loaded (dummy)."); // LOG E
         }
 
-        if (sessionChanged || currentTournamentData.matches.length === 0) {
-            console.log("onAuthStateChange: ===> BEFORE calling await loadInitialTournamentData..."); // NEUER LOG 13
-             try {
-                await loadInitialTournamentData();
-                console.log("onAuthStateChange: ===> AFTER calling await loadInitialTournamentData."); // NEUER LOG 14
-             } catch(loadDataError){
-                 console.error("onAuthStateChange: Error DURING loadInitialTournamentData call:", loadDataError); // NEUER LOG 15
-             }
+        // !!! NÄCHSTE SUPABASE AUFRUFE HIER AUSKOMMENTIERT FÜR DEN TEST !!!
+        // console.log("onAuthStateChange (SYNC-TEST): SKIPPING loadInitialTournamentData call."); // LOG F (skipped)
+        // console.log("onAuthStateChange (SYNC-TEST): SKIPPING subscribeToRelevantMatches call."); // LOG G (skipped)
 
-        }
-
-        console.log("onAuthStateChange: Subscribing to realtime matches."); // LOG G
-        subscribeToRelevantMatches();
     } else {
-        console.log("onAuthStateChange: No session."); // LOG H (vereinfacht)
+         console.log("onAuthStateChange (SYNC-TEST): No session."); // LOG H
     }
 
-    console.log("onAuthStateChange: Calling setupInitialView."); // LOG I
+    console.log("onAuthStateChange (SYNC-TEST): Calling setupInitialView."); // LOG I
     setupInitialView();
-    console.log("onAuthStateChange: Finished."); // LOG J
+    console.log("onAuthStateChange (SYNC-TEST): Finished."); // LOG J
 });
 
 // ULTRA-VEREINFACHTE, SYNCHRONE loadUserProfile
