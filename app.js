@@ -59,47 +59,55 @@ const confirmRejectBtn = document.getElementById('confirm-result-reject-btn');
 
 // Wird bei Login/Logout aufgerufen
 // Event Listener für Änderungen im Login-Status
+// Version von onAuthStateChange mit Logs UM den loadUserProfile Aufruf
 supabaseClient.auth.onAuthStateChange(async (_event, session) => {
-    console.log("onAuthStateChange: Event received. Event:", _event, "Session:", session); // LOG A
+    console.log("onAuthStateChange: Event received. Event:", _event); // LOG A (vereinfacht)
     const sessionChanged = currentSession?.user?.id !== session?.user?.id;
     const justLoggedOut = !session && currentSession;
-
-    const previousSessionUserId = currentSession?.user?.id; // Merken für Vergleich
-    currentSession = session; // Immer aktuelle Session speichern
+    const previousSessionUserId = currentSession?.user?.id;
+    currentSession = session;
 
     if (sessionChanged || justLoggedOut) {
         console.log("onAuthStateChange: Unsubscribing old realtime listeners."); // LOG B
         unsubscribeAllRealtime();
         currentUserProfile = null;
         currentTournamentData = { matches: [], participants: [], groups: {}, knockoutMatches: {} };
-        if (justLoggedOut) {
-            console.log('onAuthStateChange: User logged out.'); // LOG C
-        }
+        if (justLoggedOut) console.log('onAuthStateChange: User logged out.'); // LOG C
     }
 
     if (session) {
-         console.log(`onAuthStateChange: Session exists for user ${session.user.id}. Trying to load profile.`); // LOG D
-         // Lade Profil nur, wenn es noch nicht geladen ist ODER der User gewechselt hat
-         if (!currentUserProfile || currentUserProfile.id !== session.user.id) {
-              await loadUserProfile(session.user.id);
-         } else {
-              console.log("onAuthStateChange: Profile already loaded for this user."); // LOG E
-         }
+        console.log(`onAuthStateChange: Session exists for user ${session.user.id}.`); // LOG D (vereinfacht)
+        if (!currentUserProfile || currentUserProfile.id !== session.user.id) {
+            console.log("onAuthStateChange: ===> BEFORE calling await loadUserProfile..."); // NEUER LOG 10
+            try {
+                await loadUserProfile(session.user.id);
+                console.log("onAuthStateChange: ===> AFTER calling await loadUserProfile."); // NEUER LOG 11
+            } catch (loadProfileError) {
+                 console.error("onAuthStateChange: Error DURING loadUserProfile call:", loadProfileError); // NEUER LOG 12
+            }
+        } else {
+            console.log("onAuthStateChange: Profile already loaded."); // LOG E
+        }
 
-        // Lade Turnierdaten nur, wenn User gewechselt hat oder Daten fehlen
-         if (sessionChanged || currentTournamentData.matches.length === 0) {
-            console.log("onAuthStateChange: Triggering loadInitialTournamentData."); // LOG F
-            await loadInitialTournamentData();
-         }
+        if (sessionChanged || currentTournamentData.matches.length === 0) {
+            console.log("onAuthStateChange: ===> BEFORE calling await loadInitialTournamentData..."); // NEUER LOG 13
+             try {
+                await loadInitialTournamentData();
+                console.log("onAuthStateChange: ===> AFTER calling await loadInitialTournamentData."); // NEUER LOG 14
+             } catch(loadDataError){
+                 console.error("onAuthStateChange: Error DURING loadInitialTournamentData call:", loadDataError); // NEUER LOG 15
+             }
+
+        }
 
         console.log("onAuthStateChange: Subscribing to realtime matches."); // LOG G
         subscribeToRelevantMatches();
     } else {
-         console.log("onAuthStateChange: No session, skipping profile/data load and subscriptions."); // LOG H
+        console.log("onAuthStateChange: No session."); // LOG H (vereinfacht)
     }
 
     console.log("onAuthStateChange: Calling setupInitialView."); // LOG I
-    setupInitialView(); // UI immer anpassen
+    setupInitialView();
     console.log("onAuthStateChange: Finished."); // LOG J
 });
 
